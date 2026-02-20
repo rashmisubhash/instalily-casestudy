@@ -37,20 +37,6 @@ Out-of-scope appliance requests are intentionally deflected with clear guidance.
 We separate decisioning (router), knowledge access (retrieval/tools), and presentation (frontend) to keep responsibilities modular and clear.
 This keeps the system extensible, new intents mean adding a handler and retrieval logic, not rebuilding the stack.
 
-
-## Data Strategy
-### Structured Store (JSON)
-Used for deterministic lookups and compatibility checks:
-- `part_id_map.json` → part details,
-- `model_id_to_parts_map.json` / `model_to_parts_map.json` → model compatibility lists.
-
-### Semantic Store (Vector DB)
-Used for symptom-based retrieval:
-- Bedrock Titan embeddings,
-- Chroma persistent collection,
-- top-k similarity retrieval,
-- reranking by symptom overlap, rating, and basic commercial heuristics.
-
 ## Query Lifecycle
 1. **Candidate extraction** - Run deterministic regex extraction for part/model IDs to capture high-precision identifiers immediately.
 
@@ -96,27 +82,22 @@ This is not just an LLM wrapper over product data. It is a constrained support s
 - It provides clarification and likely alternatives with explicit verification messaging.
 
 ### Confidence Formula (Implemented)
-The router uses a weighted score and thresholds to drive route selection:
+The router uses a weighted score and thresholds to drive route selection. This gives measurable uncertainty handling instead of binary pass/fail routing.
 
 ```text
 confidence = 0.10 * part_regex_match + 0.10 * model_regex_match + 0.15 * part_id_valid
   + 0.15 * model_id_valid + 0.08 * model_present_but_unvalidated + 0.40 * llm_planner_confidence 
   + 0.05 * session_model_plus_symptom + 0.05 * session_has_last_symptom
 ```
-
-This gives measurable uncertainty handling instead of binary pass/fail routing. Current threshold behavior:
 - `< 0.55`: clarification/model-required style recovery paths.
 - `>= 0.55`: intent-specific handlers execute.
 
 ### Hallucination Prevention
-Hallucination prevention is layered:
 - **Grounding before generation** - Part IDs and model IDs are validated against local maps. Unknown models are marked unvalidated and handled explicitly.
 - **Scope and topic controls** - Enforces scope guardrails and topic-drift checks to block unsupported appliances and prevent stale context from affecting new queries.
 - **Post-generation checks** - Validates generated part IDs against the catalog, applies intent-specific quality checks, and enforces Pydantic response contracts to prevent malformed frontend payloads.
 
 ### Cost-Aware Design
-Cost and latency controls are built into architecture choices:
-
 | Mechanism | What it saves | Trade-off |
 |---|---|---|
 | Deterministic-first routing | Fewer LLM calls on clear turns. | More routing logic to maintain. |
@@ -127,10 +108,8 @@ Cost and latency controls are built into architecture choices:
 
 ### Semantic Search Strategy
 Troubleshooting retrieval combines recall and precision:
-- Bedrock Titan embeddings + Chroma persistent index for semantic recall.
-- Compatibility-aware filtering when model evidence is valid.
-- Reranking combines semantic relevance with practical heuristics.
-- Final answer is generated from retrieved context and validated before return.
+- Bedrock Titan embeddings + Chroma persistent index for semantic recall. Compatibility-aware filtering when model evidence is valid.
+- Reranking combines semantic relevance with practical heuristics. Final answer is generated from retrieved context and validated before return.
 
 ### Production Reliability: Fallbacks, Guardrails, Graceful Degradation
 These mechanisms are treated as product reliability features, not optional AI behavior:
