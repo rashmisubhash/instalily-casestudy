@@ -3,14 +3,15 @@
 This project implements an AI support agent for PartSelect focused on **refrigerator** and **dishwasher** parts. Beyond the core workflows, additional edge and follow-up conversation paths are covered in the automated tests under `backend_fastapi/tests`.
 
 The implementation emphasizes deterministic routing, confidence-aware fallback, strict scope control, and grounded retrieval.
+Demo - Loom walkthrough: `<add-link-here>`
 
 ## Architecture (High Level)
-![Archtecture Diagram](<API LAYER (FastAPI)  (1).png>)
+![Architecture Diagram](docs/images/architecture.png)
 
 
 1. **Frontend (Next.js chat UI)** - Renders intent-specific UI blocks (answers, install steps, compatibility, troubleshooting, parts) and maintains lightweight context chips for smooth multi-turn support. Uses optimistic interactions (quick actions, loading, retry/export) while keeping all business logic in the backend.
 
-2. **API Layer (FastAPI)** - Exposes /chat as the orchestration boundary handling normalization, session state, validation, and telemetry in a single predictable lifecycle. Enforces contract stability with Pydantic models so frontend behavior stays deterministic even as retrieval or generation paths vary.
+2. **API Layer (FastAPI)** - Exposes `/chat` as the orchestration boundary handling normalization, session state, validation, and telemetry in a single predictable lifecycle. Enforces contract stability with Pydantic models so frontend behavior stays deterministic even as retrieval or generation paths vary.
 
 3. **Intelligence Router**
 - Central decision engine combining regex-based ID extraction with LLM intent understanding, preserving session continuity while preventing stale context from overriding new intent.
@@ -20,8 +21,7 @@ The implementation emphasizes deterministic routing, confidence-aware fallback, 
 - Uses dual retrieval: exact JSON/map lookups for correctness-critical data and vector search for symptom relevance, with compatibility-first filtering and heuristic reranking.
 - Generates grounded responses from retrieved context, validates post-generation, and enforces schema-safe output via Pydantic so the UI can render without defensive parsing.
 
-We separate decisioning (router), knowledge access (retrieval/tools), and presentation (frontend) to keep responsibilities modular and clear.
-This keeps the system extensible, new intents mean adding a handler and retrieval logic, not rebuilding the stack.
+We separate decisioning (router), knowledge access (retrieval/tools), and presentation (frontend) to keep responsibilities modular and extensible; new intents usually require adding a handler and retrieval logic, not rebuilding the stack.
 
 ## Query Lifecycle
 1. **Candidate extraction** - Run deterministic regex extraction for part/model IDs to capture high-precision identifiers immediately.
@@ -48,7 +48,7 @@ This is not just an LLM wrapper over product data. It is a constrained support s
 - **Probabilistic when necessary** - LLM planner handles intent classification and symptom semantics. Semantic retrieval handles natural-language troubleshooting that exact matching cannot.
 - **Validate before and after AI** - Enforces safeguards both before and after AI invocation: pre-AI entity validation and scope checks, followed by post-AI output validation with strict schema contracts.
 - **Confidence-aware routing** - Confidence score controls whether to proceed, ask for model, or clarify. Low-confidence turns degrade safely instead of forcing brittle guesses.
-- **Hard constraints > soft similarity** - Compatibility constraints are applied before final recommendation paths when model evidence is valid Similarity helps ranking, but does not override compatibility.
+- **Hard constraints > soft similarity** - Compatibility constraints are applied before final recommendation paths when model evidence is valid. Similarity helps ranking, but does not override compatibility.
 
 ### Key architecture decisions
 1. **Hybrid extraction over single-method extraction**
@@ -66,6 +66,9 @@ This is not just an LLM wrapper over product data. It is a constrained support s
 4. **Graceful degradation for unknown models**
 - If model is not in local compatibility data, agent does not over-claim fit.
 - It provides clarification and likely alternatives with explicit verification messaging.
+
+5. **Structured output contract**
+- All responses conform to Pydantic schemas for stable frontend rendering and safer integration.
 
 ### Confidence Formula (Implemented)
 The router uses a weighted score and thresholds to drive route selection. This gives measurable uncertainty handling instead of binary pass/fail routing.
@@ -100,7 +103,8 @@ confidence = 0.10 * part_regex_match + 0.10 * model_regex_match + 0.15 * part_id
 - **Fallback mechanisms & Graceful degradation** - Low-confidence or weak validation paths shift to clarification or constrained guidance instead of guessing, ensuring users always receive an actionable next step with explicit uncertainty.
 - **Guardrails** - Strict appliance scope, entity validation, and topic-drift checks prevent invalid IDs, unsafe domain drift, and cross-turn context bleed.
 
-## Performance and Reliability -  Latest local eval snapshot
+## Performance and Reliability
+Latest local eval snapshot (current dataset and local configuration):
 | Metric | Result |
 |---|---|
 | Required prompts pass rate | **100%** |
@@ -109,17 +113,20 @@ confidence = 0.10 * part_regex_match + 0.10 * model_regex_match + 0.15 * part_id
 | Edge p95 latency | ~**1.45s** |
 
 ## Frontend UX Highlights
-- Search within conversation,+ Confidence/status badges,
-- structured sections (Answer, Steps, Tips, Parts),
-- context strip (Model, Appliance),
-- Quick actions + Recovery prompts + Export and Clear chat controls.
+| Area | Highlights |
+|---|---|
+| Conversation tools | Search within conversation, export, clear chat |
+| Response UX | Confidence/status badges, structured sections (`Answer`, `Steps`, `Tips`, `Parts`) |
+| Context and recovery | Context strip (`Model`, `Appliance`), quick actions, recovery prompts |
 
 ## API Endpoints
-- POST /chat - primary chat endpoint.
-- GET /health - service health + state summary.
-- GET /metrics - lightweight runtime metrics.
-- GET /analytics - aggregated metrics view.
-- GET /debug/cache-stats - planner cache stats.
+| Endpoint | Method | Purpose |
+|---|---|---|
+| `/chat` | `POST` | Primary chat endpoint |
+| `/health` | `GET` | Service health + state summary |
+| `/metrics` | `GET` | Lightweight runtime metrics |
+| `/analytics` | `GET` | Aggregated metrics view |
+| `/debug/cache-stats` | `GET` | Planner cache stats |
 
 ## Setup
 ### Backend
@@ -144,6 +151,12 @@ NEXT_PUBLIC_API_URL=http://127.0.0.1:8000
 ```
 
 ## Testing and Validation
+Quick evaluation path:
+```bash
+cd backend_fastapi && source .venv/bin/activate && pytest -q tests
+python eval/run_eval.py
+```
+
 ### Unit + API tests
 ```bash
 cd backend_fastapi
