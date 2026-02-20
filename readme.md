@@ -33,19 +33,16 @@ The system is organized into four layers:
 2. **API Layer (FastAPI)** - Exposes /chat as the orchestration boundary handling normalization, session state, validation, and telemetry in a single predictable lifecycle. Enforces contract stability with Pydantic models so frontend behavior stays deterministic even as retrieval or generation paths vary.
 
 3. **Intelligence Router**
-- Central decision engine that fuses deterministic extraction (regex IDs) with semantic planning (LLM intent + symptom understanding).
-- Resolves entities against local truth maps (`part_id_map`, `model_to_parts`) before route selection to prevent downstream hallucinated assumptions.
-- Applies scope guardrails (refrigerator/dishwasher only), topic-drift checks, and confidence scoring before invoking expensive retrieval/generation.
-- Implements handler-based branching (`part_lookup`, `compatibility`, `symptom_solution`, `model_required`, `clarification_needed`) for clear failure/recovery paths.
-- Preserves session continuity but gates carry-forward entities so stale context does not hijack a new user intent.
+- Central decision engine combining regex-based ID extraction with LLM intent understanding, preserving session continuity while preventing stale context from overriding new intent.
+- Validates entities against local truth maps before routing, applies scope guardrails and confidence checks, and branches into clear handler paths (part_lookup, compatibility, symptom_solution, etc.) for reliable recovery.
 
 4. **Retrieval + Generation**
-- Uses a dual retrieval strategy: exact JSON/map lookups for correctness-critical fields and vector retrieval for symptom-to-part relevance.
-- Performs compatibility-first filtering when model evidence is valid, then reranks candidates using relevance plus practical heuristics.
-- Generates grounded responses from retrieved context (not raw user prompt only), then applies post-generation validation before returning output.
-- Guarantees schema-safe output via Pydantic contracts, allowing the UI to render rich components without defensive parsing logic.
+- Uses dual retrieval: exact JSON/map lookups for correctness-critical data and vector search for symptom relevance, with compatibility-first filtering and heuristic reranking.
+- Generates grounded responses from retrieved context, validates post-generation, and enforces schema-safe output via Pydantic so the UI can render without defensive parsing.
 
-In practice, this architecture intentionally separates **decisioning** (router) from **knowledge access** (tools/retrieval) and **presentation** (frontend). That separation is what makes the system extensible: adding a new intent generally means adding a handler and retrieval recipe, not rewriting the whole stack.
+We separate decisioning (router), knowledge access (retrieval/tools), and presentation (frontend) to keep responsibilities modular and clear.
+This keeps the system extensible, new intents mean adding a handler and retrieval logic, not rebuilding the stack.
+
 
 ## Data Strategy
 ### Structured Store (JSON)
@@ -82,8 +79,7 @@ This is not just an LLM wrapper over product data. It is a constrained support s
 
 ### Core principles
 - **Deterministic when possible**
-  - Regex extraction handles high-precision IDs.
-  - Part/model truth is resolved from local maps, not generated text.
+  - Regex extraction handles high-precision IDs. Part/model truth is resolved from local maps, not generated text.
   - Guardrails and route constraints execute before expensive generation.
 - **Probabilistic when necessary**
   - LLM planner handles intent classification and symptom semantics.
@@ -115,8 +111,7 @@ This is not just an LLM wrapper over product data. It is a constrained support s
 - If model is not in local compatibility data, agent does not over-claim fit.
 - It provides clarification and likely alternatives with explicit verification messaging.
 
-5. **Structured output contract**
-- All responses use Pydantic models for frontend stability and easier integration.
+5. **Structured output contract** - All responses use Pydantic models for frontend stability and easier integration.
 
 ### Confidence Formula (Implemented)
 The router uses a weighted score and thresholds to drive route selection:
@@ -133,16 +128,9 @@ This gives measurable uncertainty handling instead of binary pass/fail routing. 
 
 ### Hallucination Prevention
 Hallucination prevention is layered:
-- **Grounding before generation**
-  - Part IDs and model IDs are validated against local maps.
-  - Unknown models are marked unvalidated and handled explicitly.
-- **Scope and topic controls**
-  - Out-of-scope appliances are blocked with constrained responses.
-  - Topic-drift checks reduce stale context contamination.
-- **Post-generation checks**
-  - Generated part IDs are checked against the known catalog.
-  - Intent-specific validators enforce response quality constraints.
-  - Pydantic response contracts prevent malformed frontend payloads.
+- **Grounding before generation** - Part IDs and model IDs are validated against local maps. Unknown models are marked unvalidated and handled explicitly.
+- **Scope and topic controls** - Enforces scope guardrails and topic-drift checks to block unsupported appliances and prevent stale context from affecting new queries.
+- **Post-generation checks** - Validates generated part IDs against the catalog, applies intent-specific quality checks, and enforces Pydantic response contracts to prevent malformed frontend payloads.
 
 ### Cost-Aware Design
 Cost and latency controls are built into architecture choices:
@@ -161,18 +149,8 @@ Troubleshooting retrieval combines recall and precision:
 
 ### Production Reliability: Fallbacks, Guardrails, Graceful Degradation
 These mechanisms are treated as product reliability features, not optional AI behavior:
-- **Fallback mechanisms**
-  - If confidence is low, the system falls back to clarification or model-required paths instead of guessing.
-  - If model validation fails, compatibility flow shifts to constrained guidance (explicit uncertainty + alternatives), not hard failure.
-  - If retrieval quality is weak, router selects safe response types with clear next-step prompts.
-- **Guardrails**
-  - Strict appliance scope boundary (refrigerator/dishwasher) limits unsafe domain drift.
-  - Entity validation guardrails prevent invalid part/model IDs from entering recommendation logic.
-  - Topic drift checks reduce cross-turn context bleed when user intent changes.
-- **Graceful degradation**
-  - Responses degrade from "definitive answer" to "guided clarification" while preserving user momentum.
-  - The user always receives an actionable next step (provide model, confirm part, clarify symptom), not a dead-end error.
-  - Degradation paths keep trust by being explicit about uncertainty instead of presenting overconfident output.
+- **Fallback mechanisms & Graceful degradation** - Low-confidence or weak validation paths shift to clarification or constrained guidance instead of guessing, ensuring users always receive an actionable next step with explicit uncertainty.
+- **Guardrails** - Strict appliance scope, entity validation, and topic-drift checks prevent invalid IDs, unsafe domain drift, and cross-turn context bleed.
 
 ## Performance and Reliability
 ### Current behavior
@@ -184,13 +162,6 @@ These mechanisms are treated as product reliability features, not optional AI be
 - Edge prompts: **100% pass**
 - Required p95 latency: ~**1.65s**
 - Edge p95 latency: ~**1.45s**
-
-### Important note for Loom
-`part_lookup` tail latency remains the main optimization target.
-
-This is an explicit next-step path (without reducing answer quality):
-- keep current quality path,
-- optimize generation latency/caching/warm paths for install/part-details responses.
 
 ## Frontend UX Highlights
 - Search within conversation,
