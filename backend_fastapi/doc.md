@@ -277,3 +277,29 @@ app/
 {"status":"success","planner_cache":{"cache_size":1,"max_size":1000,"hits":1,"misses":1,"total_requests":2,"hit_rate_pct":50.0,"memory_saved_pct":50.0,"avg_time_saved_ms":1200}}%     
 
 metrics.json
+
+Things that subtly impress:
+
+Clear folder structure
+
+No giant 1,000-line file
+
+Logging
+
+Typed models (Pydantic)
+
+Config file for model ID
+
+Error handling
+
+Fallback logic
+
+
+
+Audit your repo structure
+
+Craft your README outline
+
+Design the 6-slide deck
+
+Or refine how you’ll explain this in an interview

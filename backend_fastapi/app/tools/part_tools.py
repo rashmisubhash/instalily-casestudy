@@ -20,24 +20,20 @@ from app.core.state import state
 logger = logging.getLogger(__name__)
 
 
-# ============================================================================
 # BEDROCK CLIENT FOR EMBEDDINGS
-# ============================================================================
 
 try:
     bedrock_runtime = boto3.client(
         service_name='bedrock-runtime',
         region_name='us-east-1'  # Change to your region
     )
-    logger.info("✓ Bedrock runtime client initialized")
+    logger.info("Bedrock runtime client initialized")
 except Exception as e:
-    logger.error(f"✗ Failed to initialize Bedrock client: {e}")
+    logger.error(f"Failed to initialize Bedrock client: {e}")
     bedrock_runtime = None
 
 
-# ============================================================================
 # CHROMADB CLIENT (Initialize once)
-# ============================================================================
 
 try:
     CHROMA_DIR = config.CHROMA_DIR
@@ -45,17 +41,14 @@ try:
     
     chroma_client = chromadb.PersistentClient(path=CHROMA_DIR)
     chroma_collection = chroma_client.get_collection(name=COLLECTION_NAME)
-    
-    logger.info("✓ ChromaDB initialized successfully")
-    
+    logger.info("ChromaDB initialized successfully")
+
 except Exception as e:
-    logger.error(f"✗ Failed to initialize ChromaDB: {e}")
+    logger.error(f"Failed to initialize ChromaDB: {e}")
     chroma_collection = None
 
 
-# ============================================================================
 # EMBEDDING GENERATION (BEDROCK TITAN)
-# ============================================================================
 
 def get_embedding(text: str, model_id: str = "amazon.titan-embed-text-v1") -> Optional[List[float]]:
     """
@@ -104,9 +97,7 @@ def get_embedding(text: str, model_id: str = "amazon.titan-embed-text-v1") -> Op
         return None
 
 
-# ============================================================================
 # PART LOOKUP
-# ============================================================================
 
 def lookup_part(part_id: str) -> Optional[Dict]:
     """
@@ -131,9 +122,7 @@ def lookup_part(part_id: str) -> Optional[Dict]:
         return None
 
 
-# ============================================================================
 # COMPATIBILITY CHECK
-# ============================================================================
 
 def check_compatibility(model_id: str, part_id: str) -> bool:
     """
@@ -156,16 +145,14 @@ def check_compatibility(model_id: str, part_id: str) -> bool:
     is_compatible = part_id in compatible_parts
     
     if is_compatible:
-        logger.info(f"[COMPATIBILITY] ✓ {part_id} compatible with {model_id}")
+        logger.info(f"[COMPATIBILITY] {part_id} compatible with {model_id}")
     else:
-        logger.info(f"[COMPATIBILITY] ✗ {part_id} NOT compatible with {model_id}")
+        logger.info(f"[COMPATIBILITY] {part_id} not compatible with {model_id}")
     
     return is_compatible
 
 
-# ============================================================================
 # VECTOR SEARCH (USING BEDROCK TITAN EMBEDDINGS)
-# ============================================================================
 
 def vector_search(
     query: str, 
@@ -175,7 +162,7 @@ def vector_search(
     """
     Semantic search using ChromaDB with Bedrock Titan embeddings
     
-    IMPORTANT: Use the SAME embedding model that was used during ingestion!
+    Use the same embedding model that was used during ingestion.
     
     Args:
         query: Search query (e.g., "ice maker not working")
@@ -295,9 +282,7 @@ def _parse_document(doc_text: str, metadata: Dict) -> Dict:
     return part_data
 
 
-# ============================================================================
 # ALTERNATIVE PARTS SEARCH
-# ============================================================================
 
 def find_similar_parts(
     part_id: str, 
@@ -335,9 +320,7 @@ def find_similar_parts(
     return similar[:limit]
 
 
-# ============================================================================
 # SYMPTOM-BASED SEARCH
-# ============================================================================
 
 def search_by_symptom(
     symptom: str,
@@ -400,9 +383,7 @@ def search_by_symptom(
     return results
 
 
-# ============================================================================
 # BATCH OPERATIONS
-# ============================================================================
 
 def lookup_parts_batch(part_ids: List[str]) -> List[Dict]:
     """
@@ -448,9 +429,7 @@ def check_compatibility_batch(
     return results
 
 
-# ============================================================================
 # UTILITY: TEST EMBEDDING CONNECTION
-# ============================================================================
 
 def test_embedding_connection() -> bool:
     """
@@ -465,20 +444,18 @@ def test_embedding_connection() -> bool:
         embedding = get_embedding(test_text)
         
         if embedding and len(embedding) > 0:
-            logger.info(f"✓ Embedding test successful (dimension: {len(embedding)})")
+            logger.info(f"Embedding test successful (dimension: {len(embedding)})")
             return True
         else:
-            logger.error("✗ Embedding test failed - no embedding returned")
+            logger.error("Embedding test failed - no embedding returned")
             return False
             
     except Exception as e:
-        logger.error(f"✗ Embedding test failed: {e}")
+        logger.error(f"Embedding test failed: {e}")
         return False
 
 
-# ============================================================================
 # UTILITY: GET EMBEDDING MODEL INFO
-# ============================================================================
 
 def get_embedding_model_info(model_id: str = "amazon.titan-embed-text-v1") -> Dict:
     """
@@ -513,16 +490,14 @@ def get_embedding_model_info(model_id: str = "amazon.titan-embed-text-v1") -> Di
     return info
 
 
-# ============================================================================
 # AUTO-TEST ON IMPORT
-# ============================================================================
 
 # Test embedding connection when module loads
 if bedrock_runtime and chroma_collection:
     logger.info("Testing Bedrock Titan embeddings...")
     if test_embedding_connection():
-        logger.info("✓ part_tools ready with Bedrock Titan embeddings")
+        logger.info("part_tools ready with Bedrock Titan embeddings")
     else:
-        logger.warning("⚠ Embedding test failed - vector search may not work")
+        logger.warning("Embedding test failed - vector search may not work")
 else:
-    logger.warning("⚠ Bedrock or ChromaDB not initialized - some features disabled")
+    logger.warning("Bedrock or ChromaDB not initialized - some features disabled")

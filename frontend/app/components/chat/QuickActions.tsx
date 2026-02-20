@@ -9,33 +9,33 @@ const QUICK_ACTIONS = [
   { 
     id: 'find-part', 
     icon: Search, 
-    label: 'Find a Part',
-    query: 'Help me find the right part'
+    label: 'Find Part',
+    query: 'Help me find the correct replacement part'
   },
   { 
     id: 'check-compatibility', 
     icon: Package, 
-    label: 'Check Compatibility',
-    query: 'Check if this part is compatible with my model'
+    label: 'Verify Fit',
+    query: 'Check if this part fits my appliance model'
   },
   { 
     id: 'installation', 
     icon: Wrench, 
-    label: 'Installation Help',
-    query: 'How do I install this part?'
+    label: 'Install Help',
+    query: 'Show installation steps for this part'
   },
   { 
     id: 'troubleshoot', 
     icon: HelpCircle, 
-    label: 'Troubleshoot',
-    query: 'My appliance is not working properly'
+    label: 'Diagnose Issue',
+    query: 'My appliance has a symptom. Help me diagnose the likely part issue'
   }
 ]
 
 export default function QuickActions({ onActionClick }: QuickActionsProps) {
   return (
     <div className="quick-actions">
-      <p className="quick-actions-title">Quick Actions</p>
+      <p className="quick-actions-title">Start Faster</p>
       <div className="quick-actions-grid">
         {QUICK_ACTIONS.map((action) => (
           <button

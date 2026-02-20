@@ -20,16 +20,16 @@ class ResponseValidator:
         mentioned_parts = re.findall(r'PS\d{5,}', str(response))
         for pid in mentioned_parts:
             if pid not in state["part_id_map"]:
-                logger.error(f"[VALIDATOR] ❌ Hallucinated part: {pid}")
+                logger.error(f"[VALIDATOR] Hallucinated part: {pid}")
                 return False
         
         # Check 2: Reasonable length
         explanation = response.get("explanation", "")
         if explanation and len(explanation) < 20:
-            logger.warning("[VALIDATOR] ⚠️ Too short")
+            logger.warning("[VALIDATOR] Explanation too short")
             return False
         
-        logger.info("[VALIDATOR] ✓ Valid")
+        logger.info("[VALIDATOR] Valid")
         return True
     
     @staticmethod

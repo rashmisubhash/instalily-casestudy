@@ -1,14 +1,10 @@
-"""
-Response Handlers
-
-All handler methods for different query types
-"""
+"""Response handlers for routed agent actions."""
 from app.agent.validators import ResponseValidator
 import logging
-from typing import Dict, List, Optional, Any, Literal
+from typing import Dict, List
 from app.core.state import state
 import re
-from app.tools.part_tools import lookup_part, check_compatibility, vector_search
+from app.tools.part_tools import check_compatibility, vector_search
 from app.agent.planner import ClaudePlanner
 from app.agent.models import AgentResponse, PartInfo
 
@@ -22,7 +18,6 @@ class AgentHandlers:
         self.validator = ResponseValidator()
         self.planner = ClaudePlanner()
     
-    # ========== PART LOOKUP HANDLER ==========
     def handle_part_lookup(self, part_id, confidence, user_query):
         """Handle part installation queries"""
         
@@ -52,7 +47,6 @@ class AgentHandlers:
             related_parts=related
         )
     
-    # ========== COMPATIBILITY HANDLER ==========
     def handle_compatibility(
         self, 
         model_id: str, 
@@ -104,9 +98,74 @@ class AgentHandlers:
                 helpful_tips=llm_response.get("tips", [])
             )
 
-    
-    
-    # ========== SYMPTOM TROUBLESHOOTING (VALIDATED MODEL) ==========
+    def handle_compatibility_unvalidated(
+        self,
+        part_id: str,
+        model_id: str,
+        resolved: Dict,
+        session_entities: Dict,
+        confidence: float,
+        user_query: str
+    ) -> AgentResponse:
+        """
+        Handle compatibility check when model is not in database.
+        Return likely alternatives with a clear non-verified disclaimer.
+        """
+        logger.info(f"[HANDLER] compatibility_unvalidated: {part_id} + {model_id}")
+
+        part_data = state["part_id_map"].get(part_id)
+        part = self._build_part_info(part_data) if part_data else None
+
+        query = user_query
+        if part_data:
+            query = f"{part_data.get('title', '')} {part_data.get('description', '')} {part_data.get('symptoms', '')}".strip()
+
+        try:
+            candidates = vector_search(query, top_k=8)
+        except Exception as e:
+            logger.error(f"[VECTOR_SEARCH_ERROR] compatibility_unvalidated failed: {e}")
+            candidates = []
+
+        alternatives = []
+        for candidate in candidates:
+            candidate_pid = candidate.get("part_id")
+            if not candidate_pid or candidate_pid == part_id:
+                continue
+
+            candidate_data = state["part_id_map"].get(candidate_pid, candidate)
+            alternatives.append(self._build_part_info(candidate_data))
+
+            if len(alternatives) >= 3:
+                break
+
+        clarification_questions = [
+            "Could you double-check the model number (letters and numbers)?",
+            "If you share a corrected model number, I can confirm exact compatibility."
+        ]
+
+        if not alternatives:
+            clarification_questions.append("I can also help you find the model tag location if needed.")
+
+        return AgentResponse(
+            type="compatibility",
+            confidence=min(confidence, 0.7),
+            requires_clarification=True,
+            model_id=model_id,
+            part_id=part_id,
+            compatible=None,
+            part=part,
+            alternative_parts=alternatives,
+            explanation=(
+                f"I couldn't verify model {model_id} in our compatibility database, so I can't confirm whether "
+                f"{part_id} is compatible yet. I shared 2-3 likely alternatives to help you continue while you verify the model."
+            ),
+            clarification_questions=clarification_questions,
+            helpful_tips=[
+                "Model numbers are usually inside the door frame or on a side/back sticker.",
+                "Use the exact model number to avoid ordering incompatible parts."
+            ]
+        )
+
     def handle_symptom_troubleshoot(self, symptom, model_id, session_entities, confidence, user_query):
         """Diagnose symptom with validated model"""
         
@@ -123,15 +182,21 @@ class AgentHandlers:
         
         # Generate with LLM
         try:
-            llm_response = self._generate_diagnostic_response(...)
+            llm_response = self._generate_diagnostic_response(
+                symptom=symptom,
+                model_id=model_id,
+                recommended_parts=ranked_parts[:3],
+                user_query=user_query
+            )
         except Exception as e:
+            logger.error(f"[LLM_GENERATION_ERROR] Diagnostic generation failed: {e}")
             llm_response = self._fallback_diagnostic_response()
         
         # Validate
         if not self.validator.validate_symptom_response(llm_response, ranked_parts):
             logger.warning("[VALIDATOR] Symptom response validation failed")
         
-        symptom_confidence = self.compute_symptom_confidence(ranked_parts, confidence)
+        symptom_confidence = self._compute_symptom_confidence(ranked_parts, confidence)
         
         return AgentResponse(
             type="symptom_solution",
@@ -144,8 +209,6 @@ class AgentHandlers:
             diagnostic_steps=llm_response.get("diagnostic_steps", []),
             helpful_tips=llm_response.get("tips", [])
         )
-    
-    # ========== SYMPTOM TROUBLESHOOTING (UNVALIDATED MODEL) ==========
     
     def handle_symptom_troubleshoot_unvalidated(
         self,
@@ -164,14 +227,12 @@ class AgentHandlers:
         
         query = self._build_search_query(symptom, session_entities)
         
-        # FALLBACK STRATEGY 1: Try primary search
         try:
             raw_results = vector_search(query, top_k=10)
         except Exception as e:
             logger.error(f"[VECTOR_SEARCH_ERROR] Primary search failed: {e}")
             raw_results = []
         
-        # FALLBACK STRATEGY 2: Broader search if no results
         if not raw_results:
             appliance = session_entities.get("appliance", "refrigerator")
             logger.warning(f"[FALLBACK] No results for '{query}', trying broader search for {appliance}")
@@ -183,7 +244,6 @@ class AgentHandlers:
                 logger.error(f"[VECTOR_SEARCH_ERROR] Fallback search failed: {e}")
                 raw_results = []
         
-        # FALLBACK STRATEGY 3: Return most popular parts if still no results
         if not raw_results:
             logger.warning("[FALLBACK] Using popular parts as last resort")
             raw_results = self._get_popular_parts(session_entities.get("appliance", "refrigerator"))
@@ -211,7 +271,7 @@ class AgentHandlers:
         
         # Build response with clear warning
         explanation = (
-            f"⚠️ **Note**: Model {model_id} is not in our database, so I cannot verify part compatibility.\n\n" +
+            f"Note: Model {model_id} is not in our database, so I cannot verify part compatibility.\n\n" +
             f"Here are parts that typically fix '{symptom}':\n\n" +
             llm_response.get("explanation", "")
         )
@@ -226,7 +286,7 @@ class AgentHandlers:
             explanation=explanation,
             diagnostic_steps=llm_response.get("diagnostic_steps", []),
             helpful_tips=[
-                f"⚠️ Verify part compatibility with model {model_id} before purchasing",
+                f"Verify part compatibility with model {model_id} before purchasing",
                 "Check the product page for complete compatibility information",
                 "Contact the manufacturer if unsure about compatibility"
             ] + llm_response.get("tips", [])
@@ -256,9 +316,6 @@ class AgentHandlers:
         
         return min(base_confidence + confidence_boost, 0.95)
 
-    
-    # ========== CLARIFICATION HANDLERS ==========
-    
     def handle_model_required(self, detected_info: Dict, confidence: float) -> AgentResponse:
         """Request model number"""
         
@@ -267,7 +324,13 @@ class AgentHandlers:
         symptom = detected_info.get("symptom", "your issue")
         appliance = detected_info.get("appliance", "appliance")
         
-        message = f"I can help with {symptom}! To recommend the right parts, I need your {appliance} model number.\n\nWhere to find it:\n• Inside the appliance door\n• On the back or side panel\n• Near the serial number plate"
+        message = (
+            f"I can help with {symptom}! To recommend the right parts, I need your {appliance} model number.\n\n"
+            "Where to find it:\n"
+            "- Inside the appliance door\n"
+            "- On the back or side panel\n"
+            "- Near the serial number plate"
+        )
         
         return AgentResponse(
             type="model_required",
@@ -344,8 +407,6 @@ class AgentHandlers:
             }
         )
 
-    
-    # ========== HELPER METHODS ==========
     def _generate_part_lookup_response(self, part_data: Dict, user_query: str) -> Dict:
         """Use Claude to generate helpful installation response"""
         
@@ -418,7 +479,7 @@ If not compatible: Explain why not and what to look for in alternatives."""
             return self.planner._parse_response(response)
         except:
             return {
-                "explanation": f"{'✓ Yes' if compatible else '✗ No'}, part {part_data.get('part_id')} is {'compatible' if compatible else 'not compatible'} with model {model_id}.",
+                "explanation": f"Part {part_data.get('part_id')} is {'compatible' if compatible else 'not compatible'} with model {model_id}.",
                 "tips": []
             }
 
@@ -638,6 +699,7 @@ Be specific based on the symptom and parts."""
             return []
         
         alternatives = []
+        fallback_candidates = []
         for pid in compatible_part_ids[:20]:
             if pid == original_part_id:
                 continue
@@ -645,6 +707,8 @@ Be specific based on the symptom and parts."""
             part_data = state["part_id_map"].get(pid)
             if not part_data:
                 continue
+            
+            fallback_candidates.append(part_data)
             
             title = part_data.get("title", "")
             similarity = self._compute_title_similarity(original_title, title)
@@ -655,7 +719,18 @@ Be specific based on the symptom and parts."""
                 alternatives.append(part_info)
         
         alternatives.sort(key=lambda x: x.relevance_score or 0, reverse=True)
-        return alternatives[:limit]
+        if alternatives:
+            return alternatives[:limit]
+        
+        # Fallback: return top compatible parts by rating when title similarity is low
+        rated_fallback = []
+        for part_data in fallback_candidates:
+            part_info = self._build_part_info(part_data)
+            part_info.relevance_score = 0.2
+            rated_fallback.append(part_info)
+        
+        rated_fallback.sort(key=lambda p: p.rating if p.rating is not None else 0.0, reverse=True)
+        return rated_fallback[:limit]
     
     def _build_search_query(self, symptom, session_entities):
         query_parts = [symptom]
@@ -663,7 +738,19 @@ Be specific based on the symptom and parts."""
             query_parts.append(session_entities["appliance"])
         if session_entities.get("brand"):
             query_parts.append(session_entities["brand"])
-        return " ".join(query_parts)
+        
+        # Deduplicate repeated words to keep embeddings faster and cleaner.
+        words = " ".join(query_parts).split()
+        deduped = []
+        seen = set()
+        for word in words:
+            normalized = word.lower()
+            if normalized not in seen:
+                deduped.append(word)
+                seen.add(normalized)
+        
+        compact_query = " ".join(deduped)
+        return compact_query[:180]
 
     def _compute_title_similarity(self, title1: str, title2: str) -> float:
         """Simple keyword-based similarity"""

@@ -27,7 +27,7 @@ export default function ChatInput({
           <input
             type="text"
             className="chat-input"
-            placeholder="Ask about refrigerator or dishwasher parts... (Ctrl+Enter to send)"
+            placeholder="Enter part number, model number, or symptom... (Ctrl+Enter to send)"
             value={input}
             onChange={(e) => onInputChange(e.target.value)}
             disabled={isLoading}
@@ -65,7 +65,7 @@ export default function ChatInput({
         </div>
       </form>
       <p className="disclaimer">
-        Please refer to product links for the most accurate information.
+        Use exact model numbers for the most accurate compatibility results.
       </p>
     </div>
   )

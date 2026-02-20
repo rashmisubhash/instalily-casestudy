@@ -3,6 +3,6 @@ uvicorn[standard]==0.30.6
 pydantic==2.9.2
 python-dotenv==1.0.1
 boto3==1.35.54
-
 chromadb==0.5.5
-torch
+torch==2.5.1
+requests==2.32.3

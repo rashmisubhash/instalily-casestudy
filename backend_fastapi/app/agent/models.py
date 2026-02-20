@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from typing import Dict, List, Optional, Any, Literal
 
 
@@ -62,8 +62,4 @@ class AgentResponse(BaseModel):
     # Related information
     related_parts: List[PartInfo] = Field(default_factory=list)
     
-    class Config:
-        json_encoders = {
-            float: lambda v: round(v, 3)
-        }
-        protected_namespaces = ()
+    model_config = ConfigDict(protected_namespaces=())

@@ -1,23 +1,12 @@
-"""
-State Management - Load and manage global state
-
-Loads:
-- part_id_map.json: part_id → part details
-- model_id_to_parts_map.json: model_id → [part_ids]
-"""
+"""Global in-memory state for parts and model compatibility maps."""
 
 import json
 import logging
-from pathlib import Path
+import os
 from typing import Dict, List
 from app.core import config
 
 logger = logging.getLogger(__name__)
-
-
-# ============================================================================
-# GLOBAL STATE
-# ============================================================================
 
 state: Dict = {
     "part_id_map": {},
@@ -25,16 +14,10 @@ state: Dict = {
     "loaded": False
 }
 
-
-# ============================================================================
-# LOAD STATE
-# ============================================================================
-
 def load_state(
     part_id_map_path: str = config.PART_ID_MAP_PATH,
     model_to_parts_map_path: str = config.MODEL_ID_TO_PARTS_MAP_PATH
 ):
-
     """Load JSON maps into global state"""
     
     global state
@@ -42,8 +25,6 @@ def load_state(
     logger.info("Loading state...")
     
     try:
-        # Get absolute paths
-        import os
         base_dir = os.getcwd()
         
         part_path = os.path.join(base_dir, part_id_map_path)
@@ -52,26 +33,26 @@ def load_state(
         logger.info(f"Looking for part_id_map at: {part_path}")
         logger.info(f"Looking for model_to_parts_map at: {model_path}")
         
-        # Load part_id_map
         with open(part_path, "r") as f:
             part_id_map = json.load(f)
             state["part_id_map"] = part_id_map
-            logger.info(f"✓ Loaded {len(part_id_map)} parts from {part_id_map_path}")
+            logger.info(f"Loaded {len(part_id_map)} parts from {part_id_map_path}")
         
-        # Load model_to_parts_map
         with open(model_path, "r") as f:
             model_to_parts_map = json.load(f)
             state["model_id_to_parts_map"] = model_to_parts_map
-            logger.info(f"✓ Loaded {len(model_to_parts_map)} models from {model_to_parts_map_path}")
+            logger.info(f"Loaded {len(model_to_parts_map)} models from {model_to_parts_map_path}")
         
         state["loaded"] = True
-        logger.info("✓ State loaded successfully")
+        logger.info("State loaded successfully")
         
     except FileNotFoundError as e:
-        logger.error(f"✗ File not found: {e}")
+        logger.error(f"File not found: {e}")
         logger.error(f"Current directory: {os.getcwd()}")
         logger.error(f"Files in current directory: {os.listdir('.')}")
         raise
+
+
 def reload_state():
     """Reload state (useful for development)"""
     
@@ -86,10 +67,6 @@ def get_state() -> Dict:
     
     return state
 
-
-# ============================================================================
-# STATE QUERIES
-# ============================================================================
 
 def get_part(part_id: str) -> Dict:
     """Get part by ID"""
@@ -115,10 +92,6 @@ def model_exists(model_id: str) -> bool:
     return model_id.upper() in state["model_id_to_parts_map"]
 
 
-# ============================================================================
-# STATISTICS
-# ============================================================================
-
 def get_stats() -> Dict:
     """Get state statistics"""
     
@@ -129,11 +102,6 @@ def get_stats() -> Dict:
     }
 
 
-# ============================================================================
-# AUTO-LOAD ON IMPORT
-# ============================================================================
-
-# Automatically load state when module is imported
 try:
     load_state()
 except Exception as e:

@@ -1,48 +1,23 @@
-"""
-Complete Agent Router with LLM-Generated Responses, Guardrails, and Graceful Degradation
-
-Architecture:
-1. Extract candidates (regex)
-2. Plan with Claude (intent + entities)
-3. Validate against state
-4. Check scope & topic drift (guardrails)
-5. Compute confidence score
-6. Retrieve relevant context (JSON + Vector Search)
-7. Generate response using Claude with ALL context
-8. Return structured JSON response
-
-Key Principles:
-- NO HARDCODED RESPONSES - Let LLM use the rich data we collected
-- GRACEFUL DEGRADATION - Provide helpful answers even with unvalidated data
-- SCOPE GUARDRAILS - Only refrigerator and dishwasher
-"""
+"""Query router for intent resolution, guardrails, and handler dispatch."""
 
 import re
-import json
 import logging
 import time
-from typing import Dict, List, Optional, Any, Literal
-from pydantic import BaseModel, Field
+from concurrent.futures import ThreadPoolExecutor
+from typing import Dict, Optional, Any
 
-from app.tools.part_tools import lookup_part, check_compatibility, vector_search
 from app.core.state import state
 from app.agent.planner import ClaudePlanner
 from app.core.metrics import metrics_logger
 from app.agent.handlers import AgentHandlers
-from app.agent.models import AgentResponse, PartInfo
+from app.agent.models import AgentResponse
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 
-# ============================================================================
-# MAIN AGENT CLASS
-# ============================================================================
-
 class ApplianceAgent:
-    """
-    Intelligent routing agent with LLM-generated responses and guardrails
-    """
+    """Stateful router that resolves and routes user requests."""
     
     # Scope guardrails
     VALID_APPLIANCES = {"refrigerator", "dishwasher", "fridge"}
@@ -57,10 +32,6 @@ class ApplianceAgent:
         self.handlers = AgentHandlers()
         self.confidence_threshold = 0.55
 
-    # ========================================================================
-    # GUARDRAILS: SCOPE CHECKING
-    # ========================================================================
-    
     def check_scope(self, user_query: str, resolved: Dict) -> tuple[bool, Optional[str]]:
         """
         Two-tier scope checking:
@@ -72,41 +43,31 @@ class ApplianceAgent:
         
         query_lower = user_query.lower()
         
-        # TIER 1 (HIGHEST PRIORITY): Check LLM-extracted appliance intent
-        # This is the most accurate because it understands sentence meaning
         appliance = resolved.get("appliance")
         
         if appliance:
-            # If LLM identified an appliance, use that
             appliance_lower = appliance.lower()
             if appliance_lower in self.VALID_APPLIANCES:
                 logger.info(f"[SCOPE] In scope via LLM intent: {appliance}")
-                return True, None  # ✓ Valid appliance
+                return True, None
             else:
                 logger.info(f"[SCOPE] Out of scope via LLM intent: {appliance}")
                 return False, f"I can only help with refrigerator and dishwasher parts. For {appliance} issues, please contact a specialist."
         
-        # TIER 2: If LLM didn't identify appliance, check for part_id or model_id
-        # These indicate the user is definitely asking about parts
         if resolved.get("part_id") or resolved.get("model_id"):
             logger.info("[SCOPE] In scope via part/model ID")
             return True, None
         
-        # TIER 3: Fast keyword check ONLY as a pre-filter
-        # Only reject if keyword found AND no appliance intent
         for keyword in self.OUT_OF_SCOPE_KEYWORDS:
             pattern = r'\b' + re.escape(keyword) + r'\b'
             if re.search(pattern, query_lower):
                 logger.info(f"[SCOPE] Out of scope (keyword): {keyword}")
                 return False, f"I specialize in refrigerator and dishwasher parts only. For {keyword} repairs, please consult a qualified appliance technician or the manufacturer."
         
-        # TIER 4: If symptom but no clear appliance, assume in-scope
-        # (Could be fridge/dishwasher, user just hasn't specified yet)
         if resolved.get("symptom"):
             logger.info("[SCOPE] Assumed in scope (symptom without appliance)")
             return True, None
         
-        # Default: In scope (let the conversation continue)
         return True, None
     
     def check_topic_drift(self, session_entities: Dict, resolved: Dict) -> bool:
@@ -118,18 +79,13 @@ class ApplianceAgent:
         session_appliance = session_entities.get("appliance", "").lower()
         current_appliance = resolved.get("appliance")  
         if current_appliance:
-            current_appliance = current_appliance.lower() # ✓ Normalize for comparison
+            current_appliance = current_appliance.lower()
         
-        # If both specified and different → topic drift
         if session_appliance and current_appliance and session_appliance != current_appliance:
             logger.warning(f"[TOPIC_DRIFT] {session_appliance} → {current_appliance}")
             return True
         
         return False
-
-    # ========================================================================
-    # MAIN ENTRY POINT
-    # ========================================================================
 
     def handle_query(
         self,
@@ -147,24 +103,78 @@ class ApplianceAgent:
         logger.info(f"[SESSION] {session_entities}")
 
         try:
-            # 1️⃣ Extract deterministic candidates
+            if self._is_low_signal_query(user_query):
+                logger.info("[LOW_SIGNAL] Returning clarification prompt")
+                response = AgentResponse(
+                    type="clarification_needed",
+                    confidence=0.2,
+                    requires_clarification=True,
+                    message="I can help with refrigerator or dishwasher parts. Share a part number, model number, or symptom.",
+                    clarification_questions=[
+                        "Do you have a part number (starts with PS)?",
+                        "What model number are you working with?",
+                        "What issue are you seeing?"
+                    ]
+                )
+                latency = time.time() - start_time
+                metrics_logger.log_query(
+                    query=user_query,
+                    response_type=response.type,
+                    confidence=response.confidence,
+                    latency=latency,
+                    route="low_signal",
+                    intent=None,
+                    entities={"part_id": None, "model_id": None}
+                )
+                return response
+
+            # Extract deterministic candidates
             candidates = self.extract_candidates(user_query)
             logger.info(f"[CANDIDATES] {candidates}")
 
-            # 2️⃣ Planner (LLM)
-            planning_input = self._build_planning_input(
-                user_query, 
-                conversation_summary,
-                session_entities
-            )
-            plan = self.planner.plan(planning_input)
-            logger.info(f"[PLANNER] {plan}")
+            # Planner
+            fast_followup = self._is_followup_symptom_query(user_query, session_entities)
+            planning_input = None
+            if not fast_followup:
+                planning_input = self._build_planning_input(
+                    user_query,
+                    conversation_summary,
+                    session_entities
+                )
 
-            # 3️⃣ Validate + Resolve entities
-            resolved = self.validate_and_resolve(plan, candidates, session_entities)
+            with ThreadPoolExecutor(max_workers=3) as executor:
+                part_future = executor.submit(self._prefetch_part, candidates.get("part_id"))
+                model_future = executor.submit(self._prefetch_model, candidates.get("model_id"))
+
+                if fast_followup:
+                    plan = self._build_followup_symptom_plan(session_entities)
+                    logger.info(f"[PLANNER] Fast follow-up path: {plan}")
+                else:
+                    planner_future = executor.submit(self.planner.plan, planning_input)
+                    plan = planner_future.result()
+                    logger.info(f"[PLANNER] {plan}")
+
+                prefetched = {
+                    "part_data": part_future.result(),
+                    "model_info": model_future.result()
+                }
+                logger.info(
+                    "[PREFETCH] part_hit=%s, model_hit=%s",
+                    bool(prefetched["part_data"]),
+                    bool(prefetched["model_info"].get("exists"))
+                )
+
+            # Validate and resolve entities
+            resolved = self.validate_and_resolve(
+                plan=plan,
+                candidates=candidates,
+                session_entities=session_entities,
+                user_query=user_query,
+                prefetched=prefetched
+            )
             logger.info(f"[RESOLVED] {resolved}")
             
-            # 🛡️ GUARDRAIL 1: Check scope
+            # Guardrail: scope check
             in_scope, scope_message = self.check_scope(user_query, resolved)
             if not in_scope:
                 logger.warning(f"[OUT_OF_SCOPE] {scope_message}")
@@ -179,7 +189,6 @@ class ApplianceAgent:
                     ]
                 )
                 
-                # Log metrics
                 latency = time.time() - start_time
                 metrics_logger.log_query(
                     query=user_query,
@@ -193,20 +202,20 @@ class ApplianceAgent:
                 
                 return response
             
-            # 🛡️ GUARDRAIL 2: Check topic drift
+            # Guardrail: topic drift check
             if self.check_topic_drift(session_entities, resolved):
                 logger.warning("[TOPIC_DRIFT] Resetting session")
                 session_entities.clear()
 
-            # 4️⃣ Compute confidence score
+            # Compute confidence score
             confidence = self.compute_confidence(resolved, plan, candidates, session_entities)
             logger.info(f"[CONFIDENCE] {confidence:.3f}")
 
-            # 5️⃣ Merge into session state
+            # Merge into session state
             self.merge_state(session_entities, resolved)
             logger.info(f"[STATE] {session_entities}")
 
-            # 6️⃣ Route based on confidence and state
+            # Route based on confidence and state
             response = self.route(
                 resolved=resolved,
                 session_entities=session_entities,
@@ -221,7 +230,7 @@ class ApplianceAgent:
             error_msg = str(e)
             response = self._error_response(str(e))
         
-        # 📊 Log metrics
+        # Log metrics
         latency = time.time() - start_time
         metrics_logger.log_query(
             query=user_query,
@@ -238,10 +247,6 @@ class ApplianceAgent:
         )
         
         return response
-
-    # ========================================================================
-    # EXTRACTION & VALIDATION
-    # ========================================================================
 
     def extract_candidates(self, text: str) -> Dict[str, Optional[str]]:
         """Extract part_id and model_id using regex patterns"""
@@ -270,47 +275,64 @@ class ApplianceAgent:
         self, 
         plan: Dict, 
         candidates: Dict, 
-        session_entities: Dict
+        session_entities: Dict,
+        user_query: str,
+        prefetched: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """Validate extracted entities against database"""
-        
+        intent = plan.get("intent")
+        prefetched = prefetched or {}
+
         resolved = {
-            "intent": plan.get("intent"),
+            "intent": intent,
             "part_id": None,
             "model_id": None,
-            "symptom": plan.get("query") or plan.get("symptom"),
+            "symptom": (plan.get("query") or plan.get("symptom")) if intent == "symptom_troubleshoot" else None,
             "appliance": plan.get("appliance"),
             "brand": plan.get("brand"),
             "part_id_valid": False,
             "model_id_valid": False
         }
 
-        # Validate Part ID
+        use_session_part = self._should_reuse_session_part(user_query, intent)
+        use_session_model = self._should_reuse_session_model(user_query, intent)
+
         candidate_part = (
             candidates.get("part_id") or 
             plan.get("part_id") or 
-            session_entities.get("part_id")
+            (session_entities.get("part_id") if use_session_part else None)
         )
         
         if candidate_part:
             pid = candidate_part.upper()
-            if pid.startswith("PS") and pid in state["part_id_map"]:
+            prefetch_part = prefetched.get("part_data")
+            if prefetch_part and prefetch_part.get("part_id") == pid:
+                resolved["part_id"] = pid
+                resolved["part_id_valid"] = True
+                logger.info(f"[VALID_PART] {pid} (prefetched)")
+            elif pid.startswith("PS") and pid in state["part_id_map"]:
                 resolved["part_id"] = pid
                 resolved["part_id_valid"] = True
                 logger.info(f"[VALID_PART] {pid}")
 
-        # Validate Model ID
         candidate_model = (
             candidates.get("model_id") or 
             plan.get("model_id") or 
-            session_entities.get("model_id")
+            (session_entities.get("model_id") if use_session_model else None)
         )
         
         if candidate_model:
             mid = candidate_model.upper()
             resolved["model_id"] = mid
-            
-            if mid in state["model_id_to_parts_map"]:
+
+            prefetch_model = prefetched.get("model_info", {})
+            if prefetch_model.get("model_id") == mid:
+                if prefetch_model.get("exists"):
+                    resolved["model_id_valid"] = True
+                    logger.info(f"[VALID_MODEL] {mid} (prefetched)")
+                else:
+                    logger.info(f"[UNVALIDATED_MODEL] {mid} (not in database)")
+            elif mid in state["model_id_to_parts_map"]:
                 resolved["model_id_valid"] = True
                 logger.info(f"[VALID_MODEL] {mid}")
             else:
@@ -342,7 +364,7 @@ class ApplianceAgent:
         if resolved.get("model_id_valid"):
             score += 0.15
         elif resolved.get("model_id"):
-            # NEW: Partial credit for unvalidated model (half points)
+            # Partial credit for unvalidated model
             score += 0.08
         
         # LLM confidence
@@ -376,10 +398,6 @@ class ApplianceAgent:
         if resolved.get("brand"):
             session_entities["brand"] = resolved["brand"]
 
-    # ========================================================================
-    # ROUTING WITH GRACEFUL DEGRADATION
-    # ========================================================================
-
     def route(
         self, 
         resolved: Dict, 
@@ -394,14 +412,22 @@ class ApplianceAgent:
         model_id = resolved.get("model_id")
         symptom = resolved.get("symptom")
         
-        # 🎯 PRIORITY: Valid part_id + install/lookup intent
+        # Priority: valid part_id with install/lookup intent
         if part_id and resolved.get("part_id_valid") and intent in ["part_lookup", "install_help"]:
             logger.info(f"[ROUTER] Priority route: {intent} for part {part_id}")
             return self.handlers.handle_part_lookup(part_id, confidence, user_query)
         
-        # === Low Confidence Fallback (but check for special cases first) ===
         if confidence < self.confidence_threshold:
-            # SPECIAL CASE: Symptom + unvalidated model → try to help anyway
+            if symptom and not model_id:
+                return self.handlers.handle_model_required(
+                    detected_info={
+                        "symptom": symptom,
+                        "appliance": resolved.get("appliance"),
+                        "brand": resolved.get("brand")
+                    },
+                    confidence=max(confidence, 0.55)
+                )
+
             if symptom and model_id and not resolved.get("model_id_valid"):
                 logger.info(f"[ROUTER] Low confidence but have symptom + model → graceful degradation")
                 return self.handlers.handle_symptom_troubleshoot_unvalidated(
@@ -418,12 +444,19 @@ class ApplianceAgent:
                 confidence=confidence
             )
         
-        # === Part Lookup / Installation ===
         if part_id and intent in ["part_lookup", "install_help"]:
             return self.handlers.handle_part_lookup(part_id, confidence, user_query)
         
-        # === Compatibility Check ===
-        if part_id and model_id:
+        if intent == "compatibility_check" and part_id and model_id:
+            if not resolved.get("model_id_valid"):
+                return self.handlers.handle_compatibility_unvalidated(
+                    part_id=part_id,
+                    model_id=model_id,
+                    resolved=resolved,
+                    session_entities=session_entities,
+                    confidence=confidence,
+                    user_query=user_query
+                )
             return self.handlers.handle_compatibility(
                 model_id=model_id,
                 part_id=part_id,
@@ -431,7 +464,6 @@ class ApplianceAgent:
                 user_query=user_query
             )
         
-        # === Symptom Troubleshooting ===
         if symptom:
             if not model_id:
                 return self.handlers.handle_model_required(
@@ -443,9 +475,7 @@ class ApplianceAgent:
                     confidence=confidence
                 )
             
-            # Check if model is validated
             if resolved.get("model_id_valid"):
-                # Validated model → normal flow
                 return self.handlers.handle_symptom_troubleshoot(
                     symptom=symptom,
                     model_id=model_id,
@@ -454,7 +484,6 @@ class ApplianceAgent:
                     user_query=user_query
                 )
             else:
-                # Unvalidated model → graceful degradation
                 return self.handlers.handle_symptom_troubleshoot_unvalidated(
                     symptom=symptom,
                     model_id=model_id,
@@ -463,23 +492,17 @@ class ApplianceAgent:
                     user_query=user_query
                 )
         
-        # === Model Only ===
         if model_id and not symptom:
             return self.handlers.handle_issue_required(
                 model_id=model_id,
                 confidence=confidence
             )
         
-        # === Default Fallback ===
         return self.handlers.handle_clarification_needed(
             resolved=resolved,
             session_entities=session_entities,
             confidence=confidence
         )
-    # ========================================================================
-    # HELPER METHODS
-    # ========================================================================
-
     def _build_planning_input(self, user_query, conversation_summary, session_entities):
         """Build context for LLM planner"""
         context_parts = []
@@ -489,6 +512,82 @@ class ApplianceAgent:
             context_parts.append(f"\nSession context:\n{session_entities}")
         context_parts.append(f"\nUser message:\n{user_query}")
         return "\n".join(context_parts)
+
+    def _is_followup_symptom_query(self, user_query: str, session_entities: Dict) -> bool:
+        """Detect fast-path follow-up asks for existing symptom context."""
+        if not session_entities.get("last_symptom"):
+            return False
+
+        query = user_query.lower()
+        followup_markers = [
+            "step by step",
+            "walk me through",
+            "diagnostic checks",
+            "next steps",
+            "what should i check",
+            "how do i fix"
+        ]
+        return any(marker in query for marker in followup_markers)
+
+    def _build_followup_symptom_plan(self, session_entities: Dict) -> Dict[str, Any]:
+        """Build deterministic plan for follow-up symptom turns."""
+        return {
+            "intent": "symptom_troubleshoot",
+            "confidence": 0.9,
+            "part_id": None,
+            "model_id": session_entities.get("model_id"),
+            "symptom": session_entities.get("last_symptom"),
+            "appliance": session_entities.get("appliance"),
+            "brand": session_entities.get("brand"),
+            "query": session_entities.get("last_symptom"),
+        }
+
+    def _prefetch_part(self, part_id: Optional[str]) -> Optional[Dict[str, Any]]:
+        """Prefetch part data from in-memory state for regex-detected part IDs."""
+        if not part_id:
+            return None
+        return state["part_id_map"].get(part_id.upper())
+
+    def _prefetch_model(self, model_id: Optional[str]) -> Dict[str, Any]:
+        """Prefetch model existence info from in-memory state for regex-detected model IDs."""
+        if not model_id:
+            return {"model_id": None, "exists": False}
+
+        mid = model_id.upper()
+        return {
+            "model_id": mid,
+            "exists": mid in state["model_id_to_parts_map"]
+        }
+
+    def _should_reuse_session_part(self, user_query: str, intent: Optional[str]) -> bool:
+        """Reuse part from session only on explicit references."""
+        if intent == "symptom_troubleshoot":
+            return False
+
+        query = user_query.lower()
+        patterns = [
+            r"\bthis part\b",
+            r"\bthat part\b",
+            r"\bit\b",
+            r"\bthe part\b",
+            r"\bsame part\b"
+        ]
+        return any(re.search(p, query) for p in patterns)
+
+    def _should_reuse_session_model(self, user_query: str, intent: Optional[str]) -> bool:
+        """Reuse model from session only on explicit references."""
+        if intent == "symptom_troubleshoot":
+            return False
+
+        query = user_query.lower()
+        patterns = [
+            r"\bthis model\b",
+            r"\bthat model\b",
+            r"\bmy model\b",
+            r"\bsame model\b",
+            r"\bwith it\b"
+        ]
+        return any(re.search(p, query) for p in patterns)
 
     def _error_response(self, error_msg: str) -> AgentResponse:
         """Generate error response"""
@@ -502,3 +601,18 @@ class ApplianceAgent:
                 "What issue are you experiencing?"
             ]
         )
+
+    def _is_low_signal_query(self, user_query: str) -> bool:
+        """Detect low-information or nonsensical queries before expensive processing."""
+        if not user_query or not user_query.strip():
+            return True
+
+        clean = user_query.strip()
+        alnum_chars = re.findall(r"[A-Za-z0-9]", clean)
+        if len(alnum_chars) < 3:
+            return True
+
+        # If there are no words and no IDs, it's likely noise.
+        has_word = bool(re.search(r"[A-Za-z]{2,}", clean))
+        has_id_like = bool(re.search(r"\b(PS\d{5,}|[A-Z0-9]{6,15})\b", clean.upper()))
+        return not has_word and not has_id_like

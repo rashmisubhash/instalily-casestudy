@@ -1,15 +1,9 @@
-"""
-FastAPI Application for PartSelect Customer Support Agent
-
-Endpoints:
-- POST /chat: Main chat interface
-- GET /health: Health check
-- GET /metrics: System metrics
-"""
+"""FastAPI service entrypoint for the PartSelect support agent."""
 
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
+from contextlib import asynccontextmanager
 from typing import Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException
@@ -20,7 +14,6 @@ from app.agent.router import ApplianceAgent
 from app.core.state import get_stats
 from app.core.metrics import metrics_logger
 
-# Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
@@ -28,17 +21,28 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-# ============================================================================
-# FASTAPI APP
-# ============================================================================
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    """Application lifecycle hooks."""
+    logger.info("=" * 60)
+    logger.info("PartSelect Customer Support Agent Starting...")
+    logger.info("=" * 60)
+    stats = get_stats()
+    logger.info(f"Loaded {stats['total_parts']} parts")
+    logger.info(f"Loaded {stats['total_models']} models")
+    logger.info("Agent initialized")
+    logger.info("=" * 60)
+    yield
+    logger.info("Shutting down...")
+
 
 app = FastAPI(
     title="PartSelect Customer Support Agent",
     description="AI-powered appliance parts assistant",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan
 )
 
-# CORS middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # In production, specify exact origins
@@ -48,44 +52,28 @@ app.add_middleware(
 )
 
 
-# ============================================================================
-# GLOBAL INSTANCES
-# ============================================================================
-
-# Initialize agent
 agent = ApplianceAgent()
-
-# In-memory session storage (in production, use Redis)
 sessions: Dict[str, Dict] = {}
 
-
-# ============================================================================
-# REQUEST/RESPONSE MODELS
-# ============================================================================
-
 class ChatMessage(BaseModel):
-    """Individual chat message"""
+    """Single chat message."""
     role: str = Field(..., description="'user' or 'assistant'")
     content: str
 
 
 class ChatRequest(BaseModel):
-    """Chat API request"""
+    """Request payload for the chat endpoint."""
     message: str = Field(..., description="User's message")
     conversation_id: Optional[str] = Field(None, description="Conversation ID for context")
     messages: Optional[List[ChatMessage]] = Field(None, description="Full conversation history")
 
 
 class ChatResponse(BaseModel):
-    """Chat API response"""
+    """Response payload for the chat endpoint."""
     conversation_id: str
     response: Dict
     timestamp: str
 
-
-# ============================================================================
-# SESSION MANAGEMENT
-# ============================================================================
 
 def get_or_create_session(conversation_id: Optional[str]) -> tuple[str, Dict]:
     """
@@ -98,12 +86,11 @@ def get_or_create_session(conversation_id: Optional[str]) -> tuple[str, Dict]:
     if conversation_id and conversation_id in sessions:
         return conversation_id, sessions[conversation_id]["entities"]
     
-    # Create new session
     new_id = str(uuid.uuid4())
     sessions[new_id] = {
         "entities": {},
         "messages": [],
-        "created_at": datetime.utcnow().isoformat()
+        "created_at": datetime.now(timezone.utc).isoformat()
     }
     
     return new_id, sessions[new_id]["entities"]
@@ -124,16 +111,15 @@ def update_session(
     session["messages"].append({
         "role": "user",
         "content": user_message,
-        "timestamp": datetime.utcnow().isoformat()
+        "timestamp": datetime.now(timezone.utc).isoformat()
     })
     
     session["messages"].append({
         "role": "assistant",
         "content": agent_response,
-        "timestamp": datetime.utcnow().isoformat()
+        "timestamp": datetime.now(timezone.utc).isoformat()
     })
     
-    # Keep only last 20 messages
     session["messages"] = session["messages"][-20:]
 
 
@@ -148,7 +134,6 @@ def build_conversation_summary(conversation_id: str) -> str:
     if not messages:
         return ""
     
-    # Simple summary: last 3 exchanges
     recent = messages[-6:] if len(messages) >= 6 else messages
     
     summary_parts = []
@@ -174,30 +159,15 @@ def build_conversation_summary(conversation_id: str) -> str:
     return "\n".join(summary_parts)
 
 
-# ============================================================================
-# ENDPOINTS
-# ============================================================================
-
 @app.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
     """
-    Main chat endpoint
-    
-    Handles:
-    1. Part lookup
-    2. Compatibility checks
-    3. Symptom troubleshooting
-    4. Installation help
+    Main chat endpoint.
     """
     
     try:
-        # Get or create session
         conversation_id, session_entities = get_or_create_session(request.conversation_id)
-        
-        # Build conversation summary
         conversation_summary = build_conversation_summary(conversation_id)
-        
-        # Process query with agent
         logger.info(f"[CHAT] conversation_id={conversation_id}, message='{request.message}'")
         
         response = agent.handle_query(
@@ -207,10 +177,7 @@ async def chat(request: ChatRequest):
             session_entities=session_entities
         )
         
-        # Convert Pydantic model to dict
-        response_dict = response.dict()
-        
-        # Update session
+        response_dict = response.model_dump()
         update_session(conversation_id, request.message, response_dict)
         
         logger.info(f"[CHAT] Response type: {response_dict['type']}, confidence: {response_dict['confidence']}")
@@ -218,7 +185,7 @@ async def chat(request: ChatRequest):
         return ChatResponse(
             conversation_id=conversation_id,
             response=response_dict,
-            timestamp=datetime.utcnow().isoformat()
+            timestamp=datetime.now(timezone.utc).isoformat()
         )
         
     except Exception as e:
@@ -228,20 +195,20 @@ async def chat(request: ChatRequest):
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint"""
+    """Return service health and loaded state summary."""
     
     stats = get_stats()
     
     return {
         "status": "healthy",
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "stats": stats
     }
 
 
 @app.get("/metrics")
 async def metrics():
-    """System metrics endpoint"""
+    """Return lightweight service metrics."""
     
     stats = get_stats()
     
@@ -252,13 +219,13 @@ async def metrics():
         "total_conversations": sum(
             len(s["messages"]) for s in sessions.values()
         ),
-        "timestamp": datetime.utcnow().isoformat()
+        "timestamp": datetime.now(timezone.utc).isoformat()
     }
 
 
 @app.get("/session/{conversation_id}")
 async def get_session(conversation_id: str):
-    """Get session details (for debugging)"""
+    """Return session details for debugging."""
     
     if conversation_id not in sessions:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -269,14 +236,14 @@ async def get_session(conversation_id: str):
         "conversation_id": conversation_id,
         "entities": session["entities"],
         "message_count": len(session["messages"]),
-        "messages": session["messages"][-10:],  # Last 10 messages
+        "messages": session["messages"][-10:],
         "created_at": session["created_at"]
     }
 
 
 @app.delete("/session/{conversation_id}")
 async def clear_session(conversation_id: str):
-    """Clear session (reset conversation)"""
+    """Clear a conversation session."""
     
     if conversation_id in sessions:
         del sessions[conversation_id]
@@ -285,27 +252,9 @@ async def clear_session(conversation_id: str):
     return {"message": "Session not found"}
 
 
-@app.get("/metrics")
-async def metrics():
-    """Get system metrics"""
-    
-    stats = get_stats()
-    
-    return {
-        "status": "healthy",
-        "stats": stats,
-        "active_sessions": len(sessions),
-        "total_conversations": sum(len(s["messages"]) for s in sessions.values())
-    }
-
-
 @app.get("/analytics")
 async def analytics():
-    """
-    Get detailed analytics about agent performance
-    
-    Returns confidence distribution, routing patterns, and performance metrics
-    """
+    """Return aggregated analytics from the metrics log."""
     
     try:
         analytics_data = metrics_logger.get_analytics(limit=1000)
@@ -323,16 +272,10 @@ async def analytics():
 
 @app.get("/debug/cache-stats")
 async def cache_stats():
-    """
-    Get cache performance statistics
-    
-    Shows planner cache hit rate and efficiency
-    """
+    """Return planner cache stats."""
     
     try:
-        # Use GLOBAL agent instance (not a new one)
         global agent
-        
         hits = agent.planner._cache_hits
         misses = agent.planner._cache_misses
         total = hits + misses
@@ -372,29 +315,3 @@ async def root():
             "cache_stats": "GET /debug/cache-stats"
         }
     }
-
-
-# ============================================================================
-# STARTUP/SHUTDOWN
-# ============================================================================
-
-@app.on_event("startup")
-async def startup_event():
-    """Run on startup"""
-    
-    logger.info("=" * 60)
-    logger.info("🚀 PartSelect Customer Support Agent Starting...")
-    logger.info("=" * 60)
-    
-    stats = get_stats()
-    logger.info(f"✓ Loaded {stats['total_parts']} parts")
-    logger.info(f"✓ Loaded {stats['total_models']} models")
-    logger.info(f"✓ Agent initialized")
-    logger.info("=" * 60)
-
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Run on shutdown"""
-    
-    logger.info("Shutting down...")

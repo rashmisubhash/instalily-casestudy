@@ -6,6 +6,7 @@ import Header from "@/app/components/layout/Header";
 import WelcomeScreen from "@/app/components/chat/WelcomeScreen";
 import Message from "@/app/components/chat/Message";
 import TypingIndicator from "@/app/components/chat/TypingIndicator";
+import LoadingSkeleton from "@/app/components/chat/LoadingSkeleton";
 import ChatInput from "@/app/components/chat/ChatInput";
 import SearchBar from "@/app/components/chat/SearchBar";
 import { useChatLogic } from "@/app/components/chat/useChatLogic";
@@ -26,6 +27,45 @@ export default function ChatPage() {
     exportChat,
   } = useChatLogic();
 
+  const latestAssistantMessage = [...messages]
+    .reverse()
+    .find((msg) => msg.role === "assistant");
+
+  const latestPayload = latestAssistantMessage?.payload;
+
+  const activeModel = (() => {
+    const modelRegex = /\b[A-Z0-9]{6,15}\b/g;
+    for (const msg of [...messages].reverse()) {
+      if (msg.detectedModel) return msg.detectedModel.toUpperCase();
+
+      if (msg.payload?.model_id) return String(msg.payload.model_id).toUpperCase();
+
+      const content = String(msg.content || "").toUpperCase();
+      const matches = content.match(modelRegex) || [];
+      const candidate = matches.find((token) => !token.startsWith("PS") && /[0-9]/.test(token));
+      if (candidate) return candidate;
+    }
+    return null;
+  })();
+
+  const activeAppliance = (() => {
+    const fromPayload = latestPayload?.detected_info?.appliance || latestPayload?.appliance;
+    if (fromPayload) return String(fromPayload);
+
+    const symptom = String(latestPayload?.symptom || "").toLowerCase();
+    if (symptom.includes("dishwasher")) return "dishwasher";
+    if (symptom.includes("refrigerator") || symptom.includes("fridge")) return "refrigerator";
+    return null;
+  })();
+
+  const showRecoveryBar =
+    !!latestAssistantMessage?.content &&
+    (
+      latestAssistantMessage.content.toLowerCase().includes("something went wrong") ||
+      latestAssistantMessage.content.toLowerCase().includes("cannot connect") ||
+      latestAssistantMessage.content.toLowerCase().includes("request timed out")
+    );
+
   return (
     <>
       <Header />
@@ -42,7 +82,16 @@ export default function ChatPage() {
             />
           )}
 
-          {/* Messages Area */}
+          {(activeModel || activeAppliance) && (
+            <div className="context-strip">
+              <span className="context-label">Conversation Context</span>
+              {activeModel && <span className="context-chip">Model: {activeModel}</span>}
+              {activeAppliance && (
+                <span className="context-chip">Appliance: {activeAppliance}</span>
+              )}
+            </div>
+          )}
+
           {/* Messages Area */}
           <div className="messages-container">
             {messages.length === 0 ? (
@@ -54,19 +103,15 @@ export default function ChatPage() {
                   <QuickActions onActionClick={setInput} />
                 </div>
 
-                {messages.map((msg) => (
+                {filteredMessages.map((msg) => (
                   <Message
                     key={msg.id}
-                    id={msg.id}
                     role={msg.role}
                     content={msg.content}
                     payload={msg.payload}
-                    type={msg.type}
                     confidence={msg.confidence}
                     timestamp={msg.timestamp}
-                    onQuickAction={(text) => {
-                      setInput(text);
-                    }}
+                    onQuickAction={setInput}
                   />
                 ))}
 
@@ -76,11 +121,28 @@ export default function ChatPage() {
                   </div>
                 )}
 
-                {isLoading && <TypingIndicator />}
+                {isLoading && (
+                  <>
+                    <TypingIndicator />
+                    <LoadingSkeleton />
+                  </>
+                )}
               </>
             )}
             <div ref={messagesEndRef} />
           </div>
+
+          {showRecoveryBar && (
+            <div className="recovery-bar">
+              <span>Need help getting back on track?</span>
+              <button type="button" onClick={() => setInput("Please retry my previous request")}>
+                Retry previous request
+              </button>
+              <button type="button" onClick={() => setInput("Help me find my appliance model number")}>
+                Find my model number
+              </button>
+            </div>
+          )}
 
           {/* Input Area */}
           <ChatInput

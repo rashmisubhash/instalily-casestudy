@@ -154,7 +154,7 @@ IMPORTANT:
         
         try:
             # Call Claude via Bedrock
-            response = self._call_bedrock(user_input)
+            response = self._call_bedrock(user_input, max_tokens=220)
             
             # Parse JSON response
             plan = self._parse_response(response)
@@ -174,12 +174,12 @@ IMPORTANT:
             logger.error(f"[PLANNER ERROR] {str(e)}", exc_info=True)
             return self._fallback_plan()
 
-    def _call_bedrock(self, user_input: str) -> str:
+    def _call_bedrock(self, user_input: str, max_tokens: int = 350) -> str:
         """Call AWS Bedrock Claude API"""
         
         body = json.dumps({
             "anthropic_version": "bedrock-2023-05-31",
-            "max_tokens": 500,
+            "max_tokens": max_tokens,
             "system": self.system_prompt,
             "messages": [
                 {
