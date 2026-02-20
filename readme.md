@@ -1,22 +1,8 @@
 # Instalily Case Study: PartSelect AI Support Agent
 
-## Overview
 This project implements an AI support agent for PartSelect focused on **refrigerator** and **dishwasher** parts. Beyond the core workflows, additional edge and follow-up conversation paths are covered in the automated tests under `backend_fastapi/tests`.
 
-The implementation prioritizes:
-- practical product UX,
-- retrieval accuracy,
-- strict scope guardrails,
-- extensibility for future intents and data growth.
-
-## Problem Scope
-PartSelect has a large parts catalog. This case study narrows scope to:
-- Refrigerators and dishwashers only,
-- ~364 part records,
-- 1,200+ model compatibility mappings.
-
-Out-of-scope appliance requests are intentionally deflected with clear guidance.
-
+The implementation emphasizes deterministic routing, confidence-aware fallback, strict scope control, and grounded retrieval.
 
 ## Architecture (High Level)
 ![Archtecture Diagram](<API LAYER (FastAPI)  (1).png>)
@@ -123,18 +109,17 @@ confidence = 0.10 * part_regex_match + 0.10 * model_regex_match + 0.15 * part_id
 | Edge p95 latency | ~**1.45s** |
 
 ## Frontend UX Highlights
-| Area A | Details A | Area B | Details B |
-|---|---|---|---|
-| Conversation tools | Search within conversation, export, clear chat, confidence/status badges | Context strip | `Model`, `Appliance` |
-| Structured response | `Answer`, `Steps`, `Tips`, `Parts` | Actions | Quick actions + recovery prompts |
+- Search within conversation,+ Confidence/status badges,
+- structured sections (Answer, Steps, Tips, Parts),
+- context strip (Model, Appliance),
+- Quick actions + Recovery prompts + Export and Clear chat controls.
 
 ## API Endpoints
-| Endpoint A | Method A | Purpose A | Endpoint B | Method B | Purpose B |
-|---|---|---|---|---|---|
-| `/chat` | `POST` | Primary chat endpoint | `/health` | `GET` | Service health + state summary |
-| `/metrics` | `GET` | Lightweight runtime metrics | `/analytics` | `GET` | Aggregated metrics view |
-| `/debug/cache-stats` | `GET` | Planner cache stats |  |  |  |
-
+- POST /chat - primary chat endpoint.
+- GET /health - service health + state summary.
+- GET /metrics - lightweight runtime metrics.
+- GET /analytics - aggregated metrics view.
+- GET /debug/cache-stats - planner cache stats.
 
 ## Setup
 ### Backend
@@ -171,10 +156,8 @@ pytest -q tests
 cd backend_fastapi
 source .venv/bin/activate
 python eval/run_eval.py
+# Generated report: `backend_fastapi/reports/eval_report.md`
 ```
-
-Generated report:
-- `backend_fastapi/reports/eval_report.md`
 
 ## Repository Structure
 ```text
