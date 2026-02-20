@@ -79,13 +79,21 @@ This is not just an LLM wrapper over product data. It is a constrained support s
 - **Hard constraints > soft similarity** - Compatibility constraints are applied before final recommendation paths when model evidence is valid Similarity helps ranking, but does not override compatibility.
 
 ### Key architecture decisions
-| Decision | Why | Trade-off | When to revisit |
-|---|---|---|---|
-| Hybrid extraction (regex + LLM) | Deterministic ID capture plus semantic intent understanding gives better precision and recall than either alone. | Two extraction paths to maintain and monitor. | Keep by default; revisit only if planner quality and deterministic extraction can be unified without regression. |
-| Monolithic orchestrator | Faster iteration, easier debugging, and lower ops overhead at current scope. | Less independent scaling per component than microservices. | Revisit when traffic, team size, or deployment boundaries require service decomposition. |
-| Compatibility-first filtering | Prevents recommending semantically relevant but incompatible parts. | Stricter filtering can reduce candidate pool for weak data. | Revisit only if compatibility source-of-truth changes. |
-| Graceful degradation for unknown models | Avoids hard failure and preserves user momentum with constrained next steps. | Some responses are less definitive when model evidence is missing. | Keep; improve as model coverage expands. |
-| Structured output contract (Pydantic) | Stable frontend integration, predictable rendering, safer downstream consumption. | Schema versioning discipline required as features evolve. | Revisit only if adopting explicit API versioning. |
+1. **Hybrid extraction over single-method extraction**
+- Regex is deterministic for IDs. LLM is used for semantic intent/symptom understanding.
+- This avoids both LLM-only fragility and regex-only rigidity.
+
+2. **Monolithic orchestrator over microservices**
+- Current volume of requests do not justify microservice complexity.
+- Keeps debugging and iteration speed high for this stage.
+
+3. **Compatibility filter before final recommendation quality**
+- Compatibility mismatch is costlier than semantic mismatch.
+- Incompatible parts are filtered early whenever model validation is available.
+
+4. **Graceful degradation for unknown models**
+- If model is not in local compatibility data, agent does not over-claim fit.
+- It provides clarification and likely alternatives with explicit verification messaging.
 
 ### Confidence Formula (Implemented)
 The router uses a weighted score and thresholds to drive route selection:
@@ -111,11 +119,11 @@ Cost and latency controls are built into architecture choices:
 
 | Mechanism | What it saves | Trade-off |
 |---|---|---|
-| Deterministic-first routing (regex + maps before generation) | Avoids unnecessary LLM calls for simple/clear turns. | Requires careful routing logic to avoid over-shortcutting. |
-| Planner caching | Reduces repeated planner latency and token spend on recurring prompts. | Small memory overhead and cache invalidation considerations. |
-| Follow-up shortcut paths | Speeds common continuation turns without full re-planning. | Needs conservative triggers to preserve quality. |
-| Fast deterministic response types (`clarification_needed`, `model_required`, out-of-scope) | Keeps low-information turns cheap and responsive. | Less rich responses until more context is provided. |
-| Monolithic deployment | Lower infra/ops cost and simpler release flow. | Fewer independent scaling knobs than split services. |
+| Deterministic-first routing | Fewer LLM calls on clear turns. | More routing logic to maintain. |
+| Planner caching | Lower repeat latency and token cost. | Small memory overhead. |
+| Follow-up shortcuts | Faster continuation turns. | Requires conservative trigger rules. |
+| Fast deterministic response types | Cheap, responsive low-context handling. | Less rich answers until context arrives. |
+| Monolithic deployment | Lower infra and ops cost. | Fewer independent scaling knobs. |
 
 ### Semantic Search Strategy
 Troubleshooting retrieval combines recall and precision:
@@ -132,12 +140,8 @@ These mechanisms are treated as product reliability features, not optional AI be
 ## Performance and Reliability
 ### Current behavior
 
-| Route class | Latency profile | Reliability behavior | Next optimization |
-|---|---|---|---|
-| Deterministic routes (`clarification_needed`, `model_required`, out-of-scope) | Very fast (typically low-ms to sub-second). | Strongly bounded by rules and guardrails. | Keep as-is; no major bottleneck. |
-| Compatibility checks | Fast when model validation path is clear. | Hard constraints prevent incompatible recommendations. | Expand model coverage to reduce unvalidated paths. |
-| Symptom troubleshooting | Moderate latency due to retrieval and reranking. | Graceful degradation when evidence is weak. | Tune retrieval/reranking and warm hot paths. |
-| Enriched `part_lookup` | Slowest tail due to generation-heavy response path. | High-quality grounded output with validation. | Primary target: reduce tail latency without reducing answer quality. |
+- Deterministic routes (clarification/model-required/out-of-scope) are fast.
+- Enriched `part_lookup` answers can be slower due to generation latency.
 
 ### Latest local eval snapshot
 
