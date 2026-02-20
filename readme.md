@@ -89,8 +89,8 @@ confidence = 0.10 * part_regex_match + 0.10 * model_regex_match + 0.15 * part_id
   + 0.15 * model_id_valid + 0.08 * model_present_but_unvalidated + 0.40 * llm_planner_confidence 
   + 0.05 * session_model_plus_symptom + 0.05 * session_has_last_symptom
 ```
-- `< 0.55`: clarification/model-required style recovery paths.
-- `>= 0.55`: intent-specific handlers execute.
+`< 0.55`: clarification/model-required style recovery paths.
+`>= 0.55`: intent-specific handlers execute.
 
 ### Hallucination Prevention
 - **Grounding before generation** - Part IDs and model IDs are validated against local maps. Unknown models are marked unvalidated and handled explicitly.
@@ -107,23 +107,14 @@ confidence = 0.10 * part_regex_match + 0.10 * model_regex_match + 0.15 * part_id
 | Monolithic deployment | Lower infra and ops cost. | Fewer independent scaling knobs. |
 
 ### Semantic Search Strategy
-Troubleshooting retrieval combines recall and precision:
 - Bedrock Titan embeddings + Chroma persistent index for semantic recall. Compatibility-aware filtering when model evidence is valid.
 - Reranking combines semantic relevance with practical heuristics. Final answer is generated from retrieved context and validated before return.
 
 ### Production Reliability: Fallbacks, Guardrails, Graceful Degradation
-These mechanisms are treated as product reliability features, not optional AI behavior:
 - **Fallback mechanisms & Graceful degradation** - Low-confidence or weak validation paths shift to clarification or constrained guidance instead of guessing, ensuring users always receive an actionable next step with explicit uncertainty.
 - **Guardrails** - Strict appliance scope, entity validation, and topic-drift checks prevent invalid IDs, unsafe domain drift, and cross-turn context bleed.
 
-## Performance and Reliability
-### Current behavior
-
-- Deterministic routes (clarification/model-required/out-of-scope) are fast.
-- Enriched `part_lookup` answers can be slower due to generation latency.
-
-### Latest local eval snapshot
-
+## Performance and Reliability -  Latest local eval snapshot
 | Metric | Result |
 |---|---|
 | Required prompts pass rate | **100%** |
@@ -132,19 +123,21 @@ These mechanisms are treated as product reliability features, not optional AI be
 | Edge p95 latency | ~**1.45s** |
 
 ## Frontend UX Highlights
-- Search within conversation,
-- confidence/status badges,
-- structured sections (`Answer`, `Steps`, `Tips`, `Parts`),
-- context strip (`Model`, `Appliance`),
-- quick actions and recovery prompts,
-- export and clear chat controls.
+| Capability | UX |
+|---|---|
+| Conversation tools | Search, export, clear chat |
+| Structured rendering | `Answer`, `Steps`, `Tips`, `Parts` |
+| Context visibility | `Model` and `Appliance` chips |
+| Guidance | Confidence badges, quick actions, recovery prompts |
 
 ## API Endpoints
-- `POST /chat` - primary chat endpoint.
-- `GET /health` - service health + state summary.
-- `GET /metrics` - lightweight runtime metrics.
-- `GET /analytics` - aggregated metrics view.
-- `GET /debug/cache-stats` - planner cache stats.
+| Endpoint | Purpose |
+|---|---|
+| `POST /chat` | Primary chat endpoint |
+| `GET /health` | Service health and state summary |
+| `GET /metrics` | Runtime metrics |
+| `GET /analytics` | Aggregated metrics |
+| `GET /debug/cache-stats` | Planner cache stats |
 
 ## Setup
 ### Backend
