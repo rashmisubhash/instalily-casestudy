@@ -127,6 +127,10 @@ State characteristics:
 - no network dependency for critical path lookups
 - explicit bounded scope for case-study dataset
 
+Scraper/data pipeline in brief:
+- Offline scraping generates normalized JSON artifacts in `artifacts/scrape/data/` (parts map + model compatibility map).
+- A vector build step indexes the same dataset into Chroma so semantic retrieval remains consistent with deterministic maps.
+
 ## Confidence Model and Route Gating
 Confidence is computed in `compute_confidence(...)` as weighted evidence:
 
@@ -220,6 +224,10 @@ cd backend_fastapi
 source .venv/bin/activate
 uvicorn app.main:app --reload --port 8000
 ```
+
+Bedrock auth/env notes:
+- If your local auth flow uses bearer tokens, export `AWS_BEARER_TOKEN_BEDROCK`.
+- Otherwise `boto3` resolves standard AWS credentials/profile (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`).
 
 ## Testing and Evaluation
 Test suites:

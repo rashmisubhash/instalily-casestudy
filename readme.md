@@ -3,15 +3,16 @@
 This project implements an AI support agent for PartSelect focused on **refrigerator** and **dishwasher** parts. Beyond the core workflows, additional edge and follow-up conversation paths are covered in the automated tests under `backend_fastapi/tests`.
 
 The implementation emphasizes deterministic routing, confidence-aware fallback, strict scope control, and grounded retrieval.
-Demo - Loom walkthrough: `<add-link-here>`
+Demo - Loom walkthrough: `https://www.loom.com/share/2036d3ea6cfd4523865eeb725e63a74d`
 
 ## Architecture (High Level)
 ![Architecture Diagram](docs/images/architecture.png)
 
-
 1. **Frontend (Next.js chat UI)** - Renders intent-specific UI blocks (answers, install steps, compatibility, troubleshooting, parts) and maintains lightweight context chips for smooth multi-turn support. Uses optimistic interactions (quick actions, loading, retry/export) while keeping all business logic in the backend.
 
 2. **API Layer (FastAPI)** - Exposes `/chat` as the orchestration boundary handling normalization, session state, validation, and telemetry in a single predictable lifecycle. Enforces contract stability with Pydantic models so frontend behavior stays deterministic even as retrieval or generation paths vary.
+
+3. **Scraper Pipeline** - PartSelect data is scraped offline into structured JSON maps (`part_id_map`, `model_id_to_parts_map`) and then used as deterministic source-of-truth at runtime. Vector artifacts are built from the same dataset so semantic retrieval and compatibility filtering stay aligned.
 
 3. **Intelligence Router**
 - Central decision engine combining regex-based ID extraction with LLM intent understanding, preserving session continuity while preventing stale context from overriding new intent.
@@ -20,6 +21,7 @@ Demo - Loom walkthrough: `<add-link-here>`
 4. **Retrieval + Generation**
 - Uses dual retrieval: exact JSON/map lookups for correctness-critical data and vector search for symptom relevance, with compatibility-first filtering and heuristic reranking.
 - Generates grounded responses from retrieved context, validates post-generation, and enforces schema-safe output via Pydantic so the UI can render without defensive parsing.
+
 
 We separate decisioning (router), knowledge access (retrieval/tools), and presentation (frontend) to keep responsibilities modular and extensible; new intents usually require adding a handler and retrieval logic, not rebuilding the stack.
 
@@ -136,6 +138,10 @@ cd backend_fastapi
 source .venv/bin/activate
 uvicorn app.main:app --reload --port 8000
 ```
+
+Backend auth/env notes:
+- If your Bedrock setup uses bearer auth, export `AWS_BEARER_TOKEN_BEDROCK` in your backend environment.
+- Otherwise, standard AWS credentials/profile are used by `boto3` (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`).
 
 ### Frontend
 ```bash
