@@ -139,7 +139,6 @@ source .venv/bin/activate
 uvicorn app.main:app --reload --port 8000
 ```
 
-Backend auth/env notes:
 - If your Bedrock setup uses bearer auth, export `AWS_BEARER_TOKEN_BEDROCK` in your backend environment.
 - Otherwise, standard AWS credentials/profile are used by `boto3` (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`).
 
