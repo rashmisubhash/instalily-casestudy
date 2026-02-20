@@ -123,21 +123,14 @@ confidence = 0.10 * part_regex_match + 0.10 * model_regex_match + 0.15 * part_id
 | Edge p95 latency | ~**1.45s** |
 
 ## Frontend UX Highlights
-| Capability | UX |
-|---|---|
-| Conversation tools | Search, export, clear chat |
-| Structured rendering | `Answer`, `Steps`, `Tips`, `Parts` |
-| Context visibility | `Model` and `Appliance` chips |
-| Guidance | Confidence badges, quick actions, recovery prompts |
+| Conversation tools | Search, export, clear chat | Context visibility | `Model` and `Appliance` chips |
+| Structured rendering | `Answer`, `Steps`, `Tips`, `Parts` Guidance | Confidence badges, quick actions, recovery prompts |
 
 ## API Endpoints
-| Endpoint | Purpose |
-|---|---|
-| `POST /chat` | Primary chat endpoint |
-| `GET /health` | Service health and state summary |
-| `GET /metrics` | Runtime metrics |
-| `GET /analytics` | Aggregated metrics |
-| `GET /debug/cache-stats` | Planner cache stats |
+| `/chat` | `POST` | Primary chat endpoint | `/debug/cache-stats` | `GET` | Planner cache stats |
+| `/metrics` | `GET` | Lightweight runtime metrics | `/analytics` | `GET` | Aggregated metrics view |
+| `/health` | `GET` | Service health + state summary |   |  |  |
+
 
 ## Setup
 ### Backend
