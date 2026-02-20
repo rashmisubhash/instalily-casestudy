@@ -1,12 +1,7 @@
 # Instalily Case Study: PartSelect AI Support Agent
 
 ## Overview
-This project implements an AI support agent for PartSelect focused on **refrigerator** and **dishwasher** parts.
-
-The assistant is designed to handle three core customer workflows:
-1. **Part installation help** (example: `How can I install PS11752778?`)
-2. **Compatibility checks** (example: `Does this part fit my model?`)
-3. **Symptom troubleshooting** (example: `My ice maker is not working`)
+This project implements an AI support agent for PartSelect focused on **refrigerator** and **dishwasher** parts. Beyond the core workflows, additional edge and follow-up conversation paths are covered in the automated tests under `backend_fastapi/tests`.
 
 The implementation prioritizes:
 - practical product UX,
@@ -26,7 +21,6 @@ Out-of-scope appliance requests are intentionally deflected with clear guidance.
 ## Architecture (High Level)
 ![Archtecture Diagram](<API LAYER (FastAPI)  (1).png>)
 
-The system is organized into four layers:
 
 1. **Frontend (Next.js chat UI)** - Renders intent-specific UI blocks (answers, install steps, compatibility, troubleshooting, parts) and maintains lightweight context chips for smooth multi-turn support. Uses optimistic interactions (quick actions, loading, retry/export) while keeping all business logic in the backend.
 
@@ -78,40 +72,20 @@ Used for symptom-based retrieval:
 This is not just an LLM wrapper over product data. It is a constrained support system that uses deterministic logic for correctness-critical decisions and probabilistic reasoning only where semantics are required.
 
 ### Core principles
-- **Deterministic when possible**
-  - Regex extraction handles high-precision IDs. Part/model truth is resolved from local maps, not generated text.
-  - Guardrails and route constraints execute before expensive generation.
-- **Probabilistic when necessary**
-  - LLM planner handles intent classification and symptom semantics.
-  - Semantic retrieval handles natural-language troubleshooting that exact matching cannot.
-- **Validate before and after AI**
-  - Pre-AI: entity validation and scope enforcement.
-  - Post-AI: output validators and strict schema contracts.
-- **Confidence-aware routing**
-  - Confidence score controls whether to proceed, ask for model, or clarify.
-  - Low-confidence turns degrade safely instead of forcing brittle guesses.
-- **Hard constraints > soft similarity**
-  - Compatibility constraints are applied before final recommendation paths when model evidence is valid.
-  - Similarity helps ranking, but does not override compatibility.
+- **Deterministic when possible** - Uses regex for high-precision ID extraction and resolves part/model truth from local maps rather than generated text, with guardrails and routing constraints enforced before invoking expensive generation.
+- **Probabilistic when necessary** - LLM planner handles intent classification and symptom semantics. Semantic retrieval handles natural-language troubleshooting that exact matching cannot.
+- **Validate before and after AI** - Enforces safeguards both before and after AI invocation: pre-AI entity validation and scope checks, followed by post-AI output validation with strict schema contracts.
+- **Confidence-aware routing** - Confidence score controls whether to proceed, ask for model, or clarify. Low-confidence turns degrade safely instead of forcing brittle guesses.
+- **Hard constraints > soft similarity** - Compatibility constraints are applied before final recommendation paths when model evidence is valid Similarity helps ranking, but does not override compatibility.
 
 ### Key architecture decisions
-1. **Hybrid extraction over single-method extraction**
-- Regex is deterministic for IDs. LLM is used for semantic intent/symptom understanding.
-- This avoids both LLM-only fragility and regex-only rigidity.
-
-2. **Monolithic orchestrator over microservices**
-- Current volume of requests do not justify microservice complexity.
-- Keeps debugging and iteration speed high for this stage.
-
-3. **Compatibility filter before final recommendation quality**
-- Compatibility mismatch is costlier than semantic mismatch.
-- Incompatible parts are filtered early whenever model validation is available.
-
-4. **Graceful degradation for unknown models**
-- If model is not in local compatibility data, agent does not over-claim fit.
-- It provides clarification and likely alternatives with explicit verification messaging.
-
-5. **Structured output contract** - All responses use Pydantic models for frontend stability and easier integration.
+| Decision | Why | Trade-off | When to revisit |
+|---|---|---|---|
+| Hybrid extraction (regex + LLM) | Deterministic ID capture plus semantic intent understanding gives better precision and recall than either alone. | Two extraction paths to maintain and monitor. | Keep by default; revisit only if planner quality and deterministic extraction can be unified without regression. |
+| Monolithic orchestrator | Faster iteration, easier debugging, and lower ops overhead at current scope. | Less independent scaling per component than microservices. | Revisit when traffic, team size, or deployment boundaries require service decomposition. |
+| Compatibility-first filtering | Prevents recommending semantically relevant but incompatible parts. | Stricter filtering can reduce candidate pool for weak data. | Revisit only if compatibility source-of-truth changes. |
+| Graceful degradation for unknown models | Avoids hard failure and preserves user momentum with constrained next steps. | Some responses are less definitive when model evidence is missing. | Keep; improve as model coverage expands. |
+| Structured output contract (Pydantic) | Stable frontend integration, predictable rendering, safer downstream consumption. | Schema versioning discipline required as features evolve. | Revisit only if adopting explicit API versioning. |
 
 ### Confidence Formula (Implemented)
 The router uses a weighted score and thresholds to drive route selection:
@@ -134,11 +108,14 @@ Hallucination prevention is layered:
 
 ### Cost-Aware Design
 Cost and latency controls are built into architecture choices:
-- Deterministic extraction and map lookups run before LLM-heavy paths.
-- Planner responses are cached for repeated user patterns.
-- Follow-up symptom turns use deterministic shortcuts where safe.
-- Fast deterministic routes avoid unnecessary long generation calls.
-- Monolithic orchestration keeps infra overhead low at this scale.
+
+| Mechanism | What it saves | Trade-off |
+|---|---|---|
+| Deterministic-first routing (regex + maps before generation) | Avoids unnecessary LLM calls for simple/clear turns. | Requires careful routing logic to avoid over-shortcutting. |
+| Planner caching | Reduces repeated planner latency and token spend on recurring prompts. | Small memory overhead and cache invalidation considerations. |
+| Follow-up shortcut paths | Speeds common continuation turns without full re-planning. | Needs conservative triggers to preserve quality. |
+| Fast deterministic response types (`clarification_needed`, `model_required`, out-of-scope) | Keeps low-information turns cheap and responsive. | Less rich responses until more context is provided. |
+| Monolithic deployment | Lower infra/ops cost and simpler release flow. | Fewer independent scaling knobs than split services. |
 
 ### Semantic Search Strategy
 Troubleshooting retrieval combines recall and precision:
@@ -154,14 +131,22 @@ These mechanisms are treated as product reliability features, not optional AI be
 
 ## Performance and Reliability
 ### Current behavior
-- Deterministic routes (clarification/model-required/out-of-scope) are fast.
-- Enriched `part_lookup` answers can be slower due to generation latency.
+
+| Route class | Latency profile | Reliability behavior | Next optimization |
+|---|---|---|---|
+| Deterministic routes (`clarification_needed`, `model_required`, out-of-scope) | Very fast (typically low-ms to sub-second). | Strongly bounded by rules and guardrails. | Keep as-is; no major bottleneck. |
+| Compatibility checks | Fast when model validation path is clear. | Hard constraints prevent incompatible recommendations. | Expand model coverage to reduce unvalidated paths. |
+| Symptom troubleshooting | Moderate latency due to retrieval and reranking. | Graceful degradation when evidence is weak. | Tune retrieval/reranking and warm hot paths. |
+| Enriched `part_lookup` | Slowest tail due to generation-heavy response path. | High-quality grounded output with validation. | Primary target: reduce tail latency without reducing answer quality. |
 
 ### Latest local eval snapshot
-- Required prompts: **100% pass**
-- Edge prompts: **100% pass**
-- Required p95 latency: ~**1.65s**
-- Edge p95 latency: ~**1.45s**
+
+| Metric | Result |
+|---|---|
+| Required prompts pass rate | **100%** |
+| Edge prompts pass rate | **100%** |
+| Required p95 latency | ~**1.65s** |
+| Edge p95 latency | ~**1.45s** |
 
 ## Frontend UX Highlights
 - Search within conversation,
