@@ -900,10 +900,15 @@ body {
 }
 
 .message-content {
-  background: #ffffff;
   padding: 16px;
   border-radius: 12px;
   line-height: 1.6;
+}
+
+/* Keep assistant answer card readable (avoid later generic overrides). */
+.message.assistant .message-content {
+  background: var(--ps-teal);
+  color: #ffffff;
 }
 
 .steps-section {

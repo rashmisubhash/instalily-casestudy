@@ -34,16 +34,9 @@ export default function ChatPage() {
   const latestPayload = latestAssistantMessage?.payload;
 
   const activeModel = (() => {
-    const modelRegex = /\b[A-Z0-9]{6,15}\b/g;
     for (const msg of [...messages].reverse()) {
-      if (msg.detectedModel) return msg.detectedModel.toUpperCase();
-
       if (msg.payload?.model_id) return String(msg.payload.model_id).toUpperCase();
-
-      const content = String(msg.content || "").toUpperCase();
-      const matches = content.match(modelRegex) || [];
-      const candidate = matches.find((token) => !token.startsWith("PS") && /[0-9]/.test(token));
-      if (candidate) return candidate;
+      if (msg.detectedModel) return msg.detectedModel.toUpperCase();
     }
     return null;
   })();

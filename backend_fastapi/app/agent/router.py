@@ -128,6 +128,31 @@ class ApplianceAgent:
                 )
                 return response
 
+            if self._is_obvious_non_domain_query(user_query):
+                logger.info("[NON_DOMAIN] Returning scope clarification without planner call")
+                response = AgentResponse(
+                    type="clarification_needed",
+                    confidence=0.2,
+                    requires_clarification=True,
+                    message="I specialize in refrigerator and dishwasher parts support. Share a part number, model number, or appliance symptom and I can help.",
+                    clarification_questions=[
+                        "Do you have a part number (starts with PS)?",
+                        "What appliance model number are you working with?",
+                        "What refrigerator or dishwasher issue are you seeing?"
+                    ]
+                )
+                latency = time.time() - start_time
+                metrics_logger.log_query(
+                    query=user_query,
+                    response_type=response.type,
+                    confidence=response.confidence,
+                    latency=latency,
+                    route="non_domain",
+                    intent=None,
+                    entities={"part_id": None, "model_id": None}
+                )
+                return response
+
             # Extract deterministic candidates
             candidates = self.extract_candidates(user_query)
             logger.info(f"[CANDIDATES] {candidates}")
@@ -493,6 +518,24 @@ class ApplianceAgent:
                 )
         
         if model_id and not symptom:
+            prior_symptom = session_entities.get("last_symptom")
+            if prior_symptom:
+                logger.info("[ROUTER] Model-only follow-up with prior symptom context")
+                if resolved.get("model_id_valid"):
+                    return self.handlers.handle_symptom_troubleshoot(
+                        symptom=prior_symptom,
+                        model_id=model_id,
+                        session_entities=session_entities,
+                        confidence=confidence,
+                        user_query=user_query
+                    )
+                return self.handlers.handle_symptom_troubleshoot_unvalidated(
+                    symptom=prior_symptom,
+                    model_id=model_id,
+                    session_entities=session_entities,
+                    confidence=max(confidence, 0.60),
+                    user_query=user_query
+                )
             return self.handlers.handle_issue_required(
                 model_id=model_id,
                 confidence=confidence
@@ -616,3 +659,32 @@ class ApplianceAgent:
         has_word = bool(re.search(r"[A-Za-z]{2,}", clean))
         has_id_like = bool(re.search(r"\b(PS\d{5,}|[A-Z0-9]{6,15})\b", clean.upper()))
         return not has_word and not has_id_like
+
+    def _is_obvious_non_domain_query(self, user_query: str) -> bool:
+        """Detect obvious general-knowledge questions that are outside product support scope."""
+        if not user_query:
+            return False
+
+        clean = user_query.strip().lower()
+        if not clean:
+            return False
+
+        # If the user gave a part/model ID, treat as in-domain and continue normal routing.
+        if re.search(r"\bPS\d{5,}\b", user_query.upper()):
+            return False
+        for token in re.findall(r"\b[A-Z0-9]{6,15}\b", user_query.upper()):
+            if not token.startswith("PS") and any(ch.isdigit() for ch in token):
+                return False
+
+        appliance_terms = {
+            "refrigerator", "fridge", "dishwasher", "ice maker",
+            "water filter", "door bin", "leak", "drain", "noisy", "not working", "install"
+        }
+        if any(term in clean for term in appliance_terms):
+            return False
+
+        general_markers = {
+            "what is today's date", "what is the date", "today's date",
+            "capital of", "who is", "what time", "weather", "tell me about"
+        }
+        return any(marker in clean for marker in general_markers)

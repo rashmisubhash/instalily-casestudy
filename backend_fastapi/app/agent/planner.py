@@ -11,7 +11,7 @@ import json
 import logging
 import boto3
 import hashlib
-from functools import lru_cache
+import re
 from typing import Dict, Any
 
 logger = logging.getLogger(__name__)
@@ -170,9 +170,12 @@ IMPORTANT:
             
             return plan
             
+        except ValueError as e:
+            logger.warning(f"[PLANNER PARSE] {e}")
+            return self._fallback_plan(user_input=user_input)
         except Exception as e:
             logger.error(f"[PLANNER ERROR] {str(e)}", exc_info=True)
-            return self._fallback_plan()
+            return self._fallback_plan(user_input=user_input)
 
     def _call_bedrock(self, user_input: str, max_tokens: int = 350) -> str:
         """Call AWS Bedrock Claude API"""
@@ -271,16 +274,37 @@ IMPORTANT:
         
         return plan
 
-    def _fallback_plan(self) -> Dict[str, Any]:
+    def _fallback_plan(self, user_input: str = "") -> Dict[str, Any]:
         """Fallback plan when LLM fails"""
-        
+
+        clean = (user_input or "").strip().upper()
+        part_match = re.search(r"\bPS\d{5,}\b", clean)
+        model_match = re.search(r"\b[A-Z0-9]{6,15}\b", clean)
+        model_id = None
+        if model_match:
+            candidate = model_match.group(0)
+            if not candidate.startswith("PS") and not candidate.isalpha():
+                model_id = candidate
+
+        if part_match:
+            return {
+                "intent": "part_lookup",
+                "confidence": 0.55,
+                "part_id": part_match.group(0),
+                "model_id": model_id,
+                "symptom": None,
+                "appliance": None,
+                "brand": None,
+                "query": user_input.lower().strip() if user_input else None
+            }
+
         return {
             "intent": "general_question",
             "confidence": 0.3,
             "part_id": None,
-            "model_id": None,
+            "model_id": model_id,
             "symptom": None,
             "appliance": None,
             "brand": None,
-            "query": None
+            "query": user_input.lower().strip() if user_input else None
         }

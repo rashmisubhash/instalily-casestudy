@@ -144,6 +144,42 @@ def test_symptom_intent_does_not_get_hijacked_by_compatibility(monkeypatch):
     assert response.type == "model_required"
 
 
+def test_model_only_followup_reuses_last_symptom(monkeypatch):
+    agent = ApplianceAgent()
+    called = {"issue_required": False, "symptom_unvalidated": False}
+
+    monkeypatch.setattr(
+        agent.handlers,
+        "handle_issue_required",
+        lambda **kwargs: called.__setitem__("issue_required", True) or _dummy_response("issue_required"),
+    )
+    monkeypatch.setattr(
+        agent.handlers,
+        "handle_symptom_troubleshoot_unvalidated",
+        lambda **kwargs: called.__setitem__("symptom_unvalidated", True) or _dummy_response("symptom_solution"),
+    )
+
+    resolved = {
+        "intent": "part_lookup",
+        "part_id": None,
+        "model_id": "WRX735SDHZ08",
+        "symptom": None,
+        "part_id_valid": False,
+        "model_id_valid": False,
+    }
+    session = {
+        "last_symptom": "Whirlpool refrigerator ice maker not working",
+        "appliance": "refrigerator",
+        "brand": "Whirlpool",
+    }
+
+    response = agent.route(resolved, session, 0.59, "WRX735SDHZ08")
+
+    assert response.type == "symptom_solution"
+    assert called["symptom_unvalidated"] is True
+    assert called["issue_required"] is False
+
+
 def test_out_of_scope_query_returns_clarification(monkeypatch):
     agent = ApplianceAgent()
 
@@ -165,6 +201,25 @@ def test_out_of_scope_query_returns_clarification(monkeypatch):
     response = agent.handle_query(
         user_query="My oven is not heating",
         conversation_id="c2",
+        conversation_summary="",
+        session_entities={},
+    )
+
+    assert response.type == "clarification_needed"
+    assert "refrigerator and dishwasher" in (response.message or "").lower()
+
+
+def test_obvious_non_domain_query_bypasses_planner(monkeypatch):
+    agent = ApplianceAgent()
+
+    def _planner_should_not_run(_input):
+        raise AssertionError("planner.plan should not be called for obvious non-domain queries")
+
+    monkeypatch.setattr(agent.planner, "plan", _planner_should_not_run)
+
+    response = agent.handle_query(
+        user_query="What is the capital of USA?",
+        conversation_id="c3",
         conversation_summary="",
         session_entities={},
     )
