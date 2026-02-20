@@ -28,17 +28,9 @@ Out-of-scope appliance requests are intentionally deflected with clear guidance.
 
 The system is organized into four layers:
 
-1. **Frontend (Next.js chat UI)**
-- Acts as a typed presentation layer over a strict backend response schema rather than free-form text rendering.
-- Renders intent-specific UI blocks (answer, install steps, compatibility cards, troubleshooting tips, suggested parts) so the user can act immediately.
-- Maintains lightweight conversation state and context chips (model/appliance/part) to reduce re-entry friction in multi-turn support flows.
-- Includes optimistic interaction patterns (quick actions, loading states, retry/export controls) while keeping business logic in backend handlers.
+1. **Frontend (Next.js chat UI)** - Renders intent-specific UI blocks (answers, install steps, compatibility, troubleshooting, parts) and maintains lightweight context chips for smooth multi-turn support. Uses optimistic interactions (quick actions, loading, retry/export) while keeping all business logic in the backend.
 
-2. **API Layer (FastAPI)**
-- Exposes `/chat` as the orchestration boundary between UI and agent pipeline.
-- Handles request normalization, session lookup/update, response validation, and telemetry hooks in one predictable lifecycle.
-- Enforces contract stability through Pydantic models so frontend behavior is deterministic even when retrieval/generation paths vary.
-- Hosts operational endpoints (`/health`, `/metrics`, `/analytics`) to support debugging and evaluation during rapid iteration.
+2. **API Layer (FastAPI)** - Exposes /chat as the orchestration boundary handling normalization, session state, validation, and telemetry in a single predictable lifecycle. Enforces contract stability with Pydantic models so frontend behavior stays deterministic even as retrieval or generation paths vary.
 
 3. **Intelligence Router**
 - Central decision engine that fuses deterministic extraction (regex IDs) with semantic planning (LLM intent + symptom understanding).
@@ -69,7 +61,6 @@ Used for symptom-based retrieval:
 - reranking by symptom overlap, rating, and basic commercial heuristics.
 
 ## Query Lifecycle
-Each request follows this sequence:
 1. **Candidate extraction** - Run deterministic regex extraction for part/model IDs to capture high-precision identifiers immediately.
 
 2. **Planner analysis** - Run LLM planner for intent + symptom semantics (install help, compatibility, troubleshooting, or clarification path), with lightweight follow-up shortcuts for common continuation turns.
@@ -86,30 +77,10 @@ Each request follows this sequence:
 
 8. **Generation and post-validation** - Generate grounded response content from retrieved context and run post-generation checks before returning schema-validated JSON to the UI.
 
-## Design Decisions
-### 1) Hybrid extraction over single-method extraction
-- Regex is deterministic for IDs. LLM is used for semantic intent/symptom understanding.
-- This avoids both LLM-only fragility and regex-only rigidity.
-
-### 2) Monolithic orchestrator over microservices
-- Current volume and team size do not justify microservice complexity.
-- Keeps debugging and iteration speed high for this stage.
-
-### 3) Compatibility filter before final recommendation quality
-- Compatibility mismatch is costlier than semantic mismatch.
-- Incompatible parts are filtered early whenever model validation is available.
-
-### 4) Graceful degradation for unknown models
-- If model is not in local compatibility data, agent does not over-claim fit.
-- It provides clarification and likely alternatives with explicit verification messaging.
-
-### 5) Structured output contract
-- All responses use Pydantic models for frontend stability and easier integration.
-
-## Why This Stands Out
+## Design Decisions & System Philosophy
 This is not just an LLM wrapper over product data. It is a constrained support system that uses deterministic logic for correctness-critical decisions and probabilistic reasoning only where semantics are required.
 
-### System Philosophy
+### Core principles
 - **Deterministic when possible**
   - Regex extraction handles high-precision IDs.
   - Part/model truth is resolved from local maps, not generated text.
@@ -127,26 +98,38 @@ This is not just an LLM wrapper over product data. It is a constrained support s
   - Compatibility constraints are applied before final recommendation paths when model evidence is valid.
   - Similarity helps ranking, but does not override compatibility.
 
+### Key architecture decisions
+1. **Hybrid extraction over single-method extraction**
+- Regex is deterministic for IDs. LLM is used for semantic intent/symptom understanding.
+- This avoids both LLM-only fragility and regex-only rigidity.
+
+2. **Monolithic orchestrator over microservices**
+- Current volume of requests do not justify microservice complexity.
+- Keeps debugging and iteration speed high for this stage.
+
+3. **Compatibility filter before final recommendation quality**
+- Compatibility mismatch is costlier than semantic mismatch.
+- Incompatible parts are filtered early whenever model validation is available.
+
+4. **Graceful degradation for unknown models**
+- If model is not in local compatibility data, agent does not over-claim fit.
+- It provides clarification and likely alternatives with explicit verification messaging.
+
+5. **Structured output contract**
+- All responses use Pydantic models for frontend stability and easier integration.
+
 ### Confidence Formula (Implemented)
 The router uses a weighted score and thresholds to drive route selection:
 
 ```text
-confidence =
-  0.10 * part_regex_match
-  + 0.10 * model_regex_match
-  + 0.15 * part_id_valid
-  + 0.15 * model_id_valid
-  + 0.08 * model_present_but_unvalidated
-  + 0.40 * llm_planner_confidence
-  + 0.05 * session_model_plus_symptom
-  + 0.05 * session_has_last_symptom
+confidence = 0.10 * part_regex_match + 0.10 * model_regex_match + 0.15 * part_id_valid
+  + 0.15 * model_id_valid + 0.08 * model_present_but_unvalidated + 0.40 * llm_planner_confidence 
+  + 0.05 * session_model_plus_symptom + 0.05 * session_has_last_symptom
 ```
 
-Current threshold behavior:
+This gives measurable uncertainty handling instead of binary pass/fail routing. Current threshold behavior:
 - `< 0.55`: clarification/model-required style recovery paths.
 - `>= 0.55`: intent-specific handlers execute.
-
-This gives measurable uncertainty handling instead of binary pass/fail routing.
 
 ### Hallucination Prevention
 Hallucination prevention is layered:
