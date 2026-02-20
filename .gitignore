@@ -1,0 +1,12 @@
+backend_fastapi/.venv/
+backend_fastapi/venv/
+backend_fastapi/.pytest_cache/
+backend_fastapi/pytest_cache/
+*__pycache__/
+frontend/node_modules/
+frontend/build/
+*.log
+.DS_Store
+build/
+backend_fastapi/.env
+frontend/package-lock.json
